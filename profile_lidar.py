@@ -219,7 +219,6 @@ vis.destroy_window()
 # ============================================================
 # GRÁFICOS ESTADÍSTICOS
 # ============================================================
-
 print("\nGenerando gráficos...")
 
 fig, axs = plt.subplots(2, 2, figsize=(14, 9))
@@ -264,3 +263,194 @@ plt.show()
 
 print(f"\nGráfico guardado en: {stats_plot}")
 print("Perfilado terminado.")
+
+# ============================================================
+# PATCH LOCAL + RUIDO GAUSSIANO
+# Insertar después de cargar points y crear output_dir
+# ============================================================
+
+# --- Configuración experimental ---
+PATCH_SIZE = 50.0       # Lado del patch en metros
+MIN_POINTS = 600        # Mínimo de puntos para aceptar un patch
+NOISE_SIGMA = 0.05      # Desviación estándar del ruido (metros)
+NOISE_AXES = "xyz"      # "xyz" o "z"
+PATCH_VIS_POINTS = 30_000
+PATCH_SEED = 42
+MAX_ATTEMPTS = 5
+MAX_DISPLAY = 5_000      # puntos para visualización
+AMPLIFY = 8              # solo para el gráfico de desplazamientos
+NOISE_SEED = 42
+
+# ------------------------------------------------------------
+# 1. Partición espacial en patches cuadrados sobre XY
+# ------------------------------------------------------------
+
+patch_rng = np.random.default_rng(PATCH_SEED)
+
+n = len(points)
+half = PATCH_SIZE / 2
+
+patch_clean = None
+patch_indices = None
+
+# Candidatos aleatorios sin construir una cuadrícula global.
+candidate_indices = patch_rng.choice(
+    n,
+    size=min(MAX_ATTEMPTS, n),
+    replace=False
+)
+
+for candidate_idx in candidate_indices:
+    center_x, center_y = points[candidate_idx, :2]
+
+    # Máscara de un cuadrado de PATCH_SIZE x PATCH_SIZE.
+    mask = (
+        (np.abs(points[:, 0] - center_x) <= half) &
+        (np.abs(points[:, 1] - center_y) <= half)
+    )
+
+    indices = np.flatnonzero(mask)
+
+    if len(indices) >= MIN_POINTS:
+        patch_indices = indices
+        patch_clean = points[indices].copy()
+        patch_center = (center_x, center_y)
+        break
+
+if patch_clean is None:
+    raise ValueError(
+        f"No se encontró un patch de {PATCH_SIZE} m con "
+        f"al menos {MIN_POINTS} puntos tras {MAX_ATTEMPTS} intentos. "
+        "Prueba un patch mayor o reduce MIN_POINTS."
+    )
+
+print(f"Patch extraído: {len(patch_clean):,} puntos")
+print(f"Centro XY: {patch_center}")
+print(f"Extensión XY: {np.ptp(patch_clean[:, 0]):.3f} x "
+      f"{np.ptp(patch_clean[:, 1]):.3f} m")
+
+noise_rng = np.random.default_rng(NOISE_SEED)
+
+# Conservar la referencia limpia
+patch_noisy = patch_clean.copy()
+
+if NOISE_AXES == "xyz":
+    noise = noise_rng.normal(
+        0.0, NOISE_SIGMA, size=patch_clean.shape
+    )
+    patch_noisy += noise
+elif NOISE_AXES == "z":
+    noise = noise_rng.normal(
+        0.0, NOISE_SIGMA, size=len(patch_clean)
+    )
+    patch_noisy[:, 2] += noise
+else:
+    raise ValueError("NOISE_AXES debe ser 'xyz' o 'z'.")
+
+# Desplazamientos reales, calculados antes de cualquier amplificación
+delta = patch_noisy - patch_clean
+delta_norm = np.linalg.norm(delta, axis=1)
+
+print(f"Sigma configurado: {NOISE_SIGMA:.4f} m")
+print(f"Desviación estándar observada X: {delta[:, 0].std():.4f} m")
+print(f"Desviación estándar observada Y: {delta[:, 1].std():.4f} m")
+print(f"Desviación estándar observada Z: {delta[:, 2].std():.4f} m")
+print(f"Desplazamiento 3D medio: {delta_norm.mean():.4f} m")
+print(f"Percentil 95 del desplazamiento: "
+      f"{np.percentile(delta_norm, 95):.4f} m")
+
+# Submuestreo solo para los gráficos
+rng_vis = np.random.default_rng(123)
+n_vis = min(MAX_DISPLAY, len(patch_clean))
+idx_vis = rng_vis.choice(len(patch_clean), n_vis, replace=False)
+
+clean_vis = patch_clean[idx_vis]
+noisy_vis = patch_noisy[idx_vis]
+delta_vis = delta[idx_vis]
+
+# Misma escala de color por elevación en ambos paneles
+z_min = min(clean_vis[:, 2].min(), noisy_vis[:, 2].min())
+z_max = max(clean_vis[:, 2].max(), noisy_vis[:, 2].max())
+
+fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+
+sc1 = axs[0].scatter(
+    clean_vis[:, 0], clean_vis[:, 1],
+    c=clean_vis[:, 2], s=2,
+    cmap="turbo", vmin=z_min, vmax=z_max,
+    rasterized=True
+)
+axs[0].set_title("Patch limpio")
+axs[0].set_xlabel("X (m)")
+axs[0].set_ylabel("Y (m)")
+axs[0].set_aspect("equal", adjustable="box")
+
+axs[1].scatter(
+    noisy_vis[:, 0], noisy_vis[:, 1],
+    c=noisy_vis[:, 2], s=2,
+    cmap="turbo", vmin=z_min, vmax=z_max,
+    rasterized=True
+)
+axs[1].set_title(f"Patch con ruido gaussiano ({NOISE_AXES})")
+axs[1].set_xlabel("X (m)")
+axs[1].set_ylabel("Y (m)")
+axs[1].set_aspect("equal", adjustable="box")
+
+fig.colorbar(sc1, ax=axs[:2], label="Elevación Z (m)", shrink=0.8)
+
+# Desplazamientos: líneas entre las posiciones limpias y ruidosas.
+# Se amplifican únicamente para facilitar su inspección visual.
+if NOISE_AXES == "xyz":
+    for p, d in zip(clean_vis, delta_vis):
+        axs[2].plot(
+            [p[0], p[0] + AMPLIFY * d[0]],
+            [p[1], p[1] + AMPLIFY * d[1]],
+            linewidth=0.5, alpha=0.5
+        )
+    axs[2].scatter(
+        clean_vis[:, 0], clean_vis[:, 1],
+        s=3, label="Posición limpia"
+    )
+    axs[2].scatter(
+        clean_vis[:, 0] + AMPLIFY * delta_vis[:, 0],
+        clean_vis[:, 1] + AMPLIFY * delta_vis[:, 1],
+        s=3, label=f"Desplazamiento XY x{AMPLIFY}"
+    )
+    axs[2].set_title("Desplazamiento horizontal amplificado")
+    axs[2].set_xlabel("X (m)")
+    axs[2].set_ylabel("Y (m)")
+else:
+    axs[2].hist(delta[:, 2], bins=60)
+    axs[2].axvline(0, linestyle="--")
+    axs[2].set_title("Distribución del ruido vertical")
+    axs[2].set_xlabel("Desplazamiento Z (m)")
+    axs[2].set_ylabel("Número de puntos")
+
+if NOISE_AXES == "xyz":
+    axs[2].set_aspect("equal", adjustable="datalim")
+    axs[2].legend(markerscale=2, fontsize=8)
+
+fig.suptitle(
+    f"Patch de {len(patch_clean):,} puntos | "
+    f"sigma={NOISE_SIGMA:.3f} m | semilla={NOISE_SEED}"
+)
+fig.tight_layout()
+
+plot_path = output_dir / "patch_gaussian_diagnostic.png"
+fig.savefig(plot_path, dpi=160, bbox_inches="tight")
+plt.show()
+plt.close(fig)
+
+# Guardar los datos completos, no el submuestreo de visualización
+np.savez_compressed(
+    output_dir / "patch_gaussian_data.npz",
+    clean=patch_clean,
+    noisy=patch_noisy,
+    source_indices=patch_indices,
+    sigma=np.array(NOISE_SIGMA),
+    axes=np.array(NOISE_AXES),
+    patch_size=np.array(PATCH_SIZE)
+)
+
+print(f"Figura: {plot_path}")
+print(f"Datos: {output_dir / 'patch_gaussian_data.npz'}")
