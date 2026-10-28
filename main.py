@@ -3,7 +3,7 @@ import config as cfg
 from data_loader import load_las_data, print_metadata
 from stats import calculate_spatial_extent, calculate_density, print_stats, calculate_nearest_neighbor
 from visualization import render_3d_heatmap, plot_profile_statistics, plot_patch_diagnostics
-from experiment import extract_patch, apply_gaussian_noise
+from experiment import extract_patch, apply_gaussian_noise, apply_laplacian_noise, inject_outliers
 
 def main():
     # 1. Carga de datos
@@ -29,11 +29,17 @@ def main():
     plot_profile_statistics(points, intensity, classes, counts, nn_distances, sample_size, cfg.TERRAIN, stats_plot_path)
     """
     # 4. Experimento: Patch y Ruido Gaussiano
-    print("\n" + "=" * 70 + "\nPATCH LOCAL + RUIDO GAUSSIANO\n" + "=" * 70)
+    print("\n" + "=" * 70 + "\nPATCH LOCAL + INYECCIÓN DE RUIDO\n" + "=" * 70)
     patch_clean, patch_indices, center = extract_patch(points, cfg.PATCH_SIZE, cfg.MIN_POINTS, cfg.MAX_ATTEMPTS, cfg.PATCH_SEED)
-    patch_noisy, delta, delta_norm = apply_gaussian_noise(patch_clean, cfg.NOISE_SIGMA, cfg.NOISE_AXES, cfg.NOISE_SEED)
     
-    # Preparar visualización del parche
+    # Aplicar ruido a elección (Gaussiano o Laplaciano)
+    # patch_noisy, delta, delta_norm = apply_gaussian_noise(patch_clean, cfg.NOISE_SIGMA, cfg.NOISE_AXES, cfg.NOISE_SEED)
+    patch_noisy, delta, delta_norm = apply_laplacian_noise(patch_clean, cfg.NOISE_LAPLACE_SCALE, cfg.NOISE_AXES, cfg.NOISE_SEED)
+    
+    # Inyectar outliers al patch ruidoso
+    patch_final, is_outlier = inject_outliers(patch_noisy, cfg.OUTLIER_TYPE, cfg.OUTLIER_RATIO, cfg.NOISE_SEED)
+    
+    # Preparar visualización (Asegurar que delta solo aplique a los puntos no-espurios en visualization.py)
     n_vis = min(cfg.MAX_DISPLAY, len(patch_clean))
     idx_vis = np.random.default_rng(123).choice(len(patch_clean), n_vis, replace=False)
     

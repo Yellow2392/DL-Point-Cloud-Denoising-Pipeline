@@ -27,5 +27,9 @@ MAX_DISPLAY = 5_000      # Puntos para gráficos de diagnóstico
 AMPLIFY = 8              # Amplificación visual del desplazamiento
 NOISE_SEED = 42
 
+NOISE_LAPLACE_SCALE = 0.15  # Parámetro 'b' para la distribución Laplaciana
+OUTLIER_RATIO = 0.05           # Porcentaje de puntos espurios a inyectar
+OUTLIER_TYPE = "clustered"     # "global" o "clustered"
+
 # Inicialización de directorios
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
