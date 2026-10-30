@@ -2,8 +2,9 @@ import numpy as np
 import config as cfg
 from data_loader import load_las_data, print_metadata
 from stats import calculate_spatial_extent, calculate_density, print_stats, calculate_nearest_neighbor
-from visualization import render_3d_heatmap, plot_profile_statistics, plot_patch_diagnostics
+from visualization import render_3d_heatmap, plot_profile_statistics, plot_patch_diagnostics, plot_denoising_comparison
 from experiment import extract_patch, apply_gaussian_noise, apply_laplacian_noise, inject_outliers
+from models.moving_least_squares import moving_least_squares_1st_order
 
 def main():
     # 1. Carga de datos
@@ -37,8 +38,45 @@ def main():
     patch_noisy, delta, delta_norm = apply_laplacian_noise(patch_clean, cfg.NOISE_LAPLACE_SCALE, cfg.NOISE_AXES, cfg.NOISE_SEED)
     
     # Inyectar outliers al patch ruidoso
-    patch_final, is_outlier = inject_outliers(patch_noisy, cfg.OUTLIER_TYPE, cfg.OUTLIER_RATIO, cfg.NOISE_SEED)
+    patch_corrupted, is_outlier = inject_outliers(patch_noisy, cfg.OUTLIER_TYPE, cfg.OUTLIER_RATIO, cfg.NOISE_SEED)
+
+    # 5. Denoising: Aplicación de Moving Least Squares
+    print("\n" + "=" * 70 + "\nDENOISING: MOVING LEAST SQUARES (MLS)\n" + "=" * 70)
+    print(f"Iniciando MLS con {cfg.MLS_K_NEIGHBORS} vecinos y h={cfg.MLS_H_PARAM}...")
     
+    # Aplicamos MLS a la nube corrompida
+    patch_denoised = moving_least_squares_1st_order(
+        patch_corrupted, 
+        k_neighbors=cfg.MLS_K_NEIGHBORS, 
+        h_param=cfg.MLS_H_PARAM
+    )
+    
+    # Calculamos la distancia RMSE global (simplificada) para reportar en consola
+    # Evaluamos solo sobre los puntos verdaderos para ver si los reubicó correctamente
+    # (los outliers severos en MLS requerirían métodos estadísticos adicionales previos)
+    valid_points_mask = ~is_outlier
+    rmse_before = np.sqrt(np.mean(np.sum((patch_corrupted[valid_points_mask] - patch_clean)**2, axis=1)))
+    rmse_after = np.sqrt(np.mean(np.sum((patch_denoised[valid_points_mask] - patch_clean)**2, axis=1)))
+    
+    print(f"RMSE inicial (solo ruido): {rmse_before:.4f} m")
+    print(f"RMSE tras MLS: {rmse_after:.4f} m")
+    
+    # Generar visualización del denoising
+    plot_denoising_path = cfg.OUTPUT_DIR / "denoising_mls_comparison.png"
+
+    # Submuestreo para graficar sin colapsar la memoria/vista
+    n_vis = min(cfg.MAX_DISPLAY, len(patch_clean))
+    idx_vis = np.random.default_rng(123).choice(len(patch_clean), n_vis, replace=False)
+    
+    # Asumiremos visualizar las mismas proporciones
+    plot_denoising_comparison(
+        patch_clean[idx_vis], 
+        patch_corrupted[idx_vis], 
+        patch_denoised[idx_vis], 
+        plot_denoising_path
+    )
+
+    """
     # Preparar visualización (Asegurar que delta solo aplique a los puntos no-espurios en visualization.py)
     n_vis = min(cfg.MAX_DISPLAY, len(patch_clean))
     idx_vis = np.random.default_rng(123).choice(len(patch_clean), n_vis, replace=False)
@@ -56,6 +94,7 @@ def main():
         sigma=np.array(cfg.NOISE_SIGMA), axes=np.array(cfg.NOISE_AXES), patch_size=np.array(cfg.PATCH_SIZE)
     )
     print(f"Ejecución finalizada. Datos guardados en {cfg.OUTPUT_DIR}")
+    """
 
 if __name__ == "__main__":
     main()

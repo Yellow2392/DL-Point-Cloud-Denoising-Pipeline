@@ -64,7 +64,7 @@ def plot_patch_diagnostics(clean_vis, noisy_vis, delta, delta_vis, axes_mode, si
     axs[1].set_title(f"Patch con ruido gaussiano ({axes_mode})")
     axs[1].set_aspect("equal", adjustable="box")
     
-    fig.colorbar(sc1, ax=axs[:2], label="Elevación Z (m)", shrink=0.8)
+    fig.colorbar(sc1, ax=axs[:2], label="Elevación Z (m)", shrink=0.8, location="bottom", pad=0.15)
     
     if axes_mode == "xyz":
         for p, d in zip(clean_vis, delta_vis):
@@ -80,6 +80,35 @@ def plot_patch_diagnostics(clean_vis, noisy_vis, delta, delta_vis, axes_mode, si
         axs[2].set_title("Distribución del ruido vertical")
     
     fig.suptitle(f"sigma={sigma:.3f} m | semilla={noise_seed}")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=160, bbox_inches="tight")
+    plt.show()
+    plt.close(fig)
+
+def plot_denoising_comparison(clean_points, noisy_points, denoised_points, output_path):
+    z_min = min(clean_points[:, 2].min(), noisy_points[:, 2].min())
+    z_max = max(clean_points[:, 2].max(), noisy_points[:, 2].max())
+    
+    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
+    
+    # 1. Limpio
+    sc1 = axs[0].scatter(clean_points[:, 0], clean_points[:, 1], c=clean_points[:, 2], s=2, cmap="turbo", vmin=z_min, vmax=z_max, rasterized=True)
+    axs[0].set_title("1. Original / Limpio")
+    axs[0].set_aspect("equal", adjustable="datalim")
+    
+    # 2. Con Ruido
+    axs[1].scatter(noisy_points[:, 0], noisy_points[:, 1], c=noisy_points[:, 2], s=2, cmap="turbo", vmin=z_min, vmax=z_max, rasterized=True)
+    axs[1].set_title("2. Corrompido (Ruido + Outliers)")
+    axs[1].set_aspect("equal", adjustable="datalim")
+    
+    # 3. Denoised (MLS)
+    axs[2].scatter(denoised_points[:, 0], denoised_points[:, 1], c=denoised_points[:, 2], s=2, cmap="turbo", vmin=z_min, vmax=z_max, rasterized=True)
+    axs[2].set_title("3. Denoising: Moving Least Squares")
+    axs[2].set_aspect("equal", adjustable="datalim")
+    
+    fig.colorbar(sc1, ax=axs.ravel().tolist(), label="Elevación Z (m)", shrink=0.5, location="bottom", pad=0.15)
+    fig.suptitle("Evaluación de Denoising: MLS Clásico", fontsize=16)
+    
     fig.tight_layout()
     fig.savefig(output_path, dpi=160, bbox_inches="tight")
     plt.show()
