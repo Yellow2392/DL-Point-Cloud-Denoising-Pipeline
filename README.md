@@ -37,6 +37,77 @@ Este repositorio implementa la fase experimental base: caracterización estadís
 
 ---
 
+### 1.1 Métricas de Evaluación de Calidad Geométrica y Fidelidad Topográfica
+
+Para evaluar rigurosamente el desempeño de los modelos de denoising tanto a nivel de dispersión y disimilitud espacial como a nivel de preservación de propiedades del relieve topográfico, se implementan las siguientes métricas basadas en el marco teórico de la investigación:
+
+---
+
+#### 1.1.1 Métricas Globales de Dispersión y Similitud Geométrica
+
+**A. Chamfer Distance (CD)**
+
+Mide la discrepancia métrica promedio bidireccional entre dos conjuntos de puntos desordenados dentro del mismo espacio euclidiano:
+
+* **Formulación simétrica:**
+
+$$CD_{sym}(P, Q) = \frac{1}{\vert{}P\vert{}} \sum_{p \in P} \min_{q \in Q} \Vert{}p - q\Vert{}_2 + \frac{1}{\vert{}Q\vert{}} \sum_{q \in Q} \min_{p \in P} \Vert{}q - p\Vert{}_2$$
+
+
+
+donde $P$ corresponde a la nube evaluada (restaurada) y $Q$ a la referencia de terreno limpio (*ground truth*). Cuanto más se aproxima a cero ($CD \to 0$), mayor es la similitud posicional global.
+
+
+
+**B. Density-aware Chamfer Distance (DCD)**
+
+Dado que las capturas LiDAR presentan densidad espacial heterogénea que puede sesgar la métrica convencional hacia zonas sobre-densas, se incorpora la distancia de Chamfer sensible a la densidad:
+
+$$CD_{dense}(P, Q) = \frac{1}{2\vert{}P\vert{}} \sum_{p \in P} \left( 1 - \frac{1}{n_{\hat{q}}} \exp(-\alpha \Vert{}p - \hat{q}\Vert{}_2) \right) + \frac{1}{2\vert{}Q\vert{}} \sum_{q \in Q} \left( 1 - \frac{1}{n_{\hat{p}}} \exp(-\alpha \Vert{}q - \hat{p}\Vert{}_2) \right)$$
+
+* $\hat{q} = \arg\min_{q \in Q} \Vert{}p - q\Vert{}_2$ es el vecino más cercano en $Q$ para cada punto $p \in P$ (y análogamente $\hat{p}$ para $q \in Q$).
+
+
+* $n_{\hat{q}} = \vert{}\{p \in P \mid \hat{q} = \arg\min_{q \in Q} \Vert{}p - q\Vert{}_2\}\vert{}$ representa la frecuencia de consulta del punto $\hat{q}$. Penaliza emparejamientos degenerados en zonas dispersas y normaliza la influencia de áreas hiper-densas.
+
+
+* $\alpha > 0$ es el factor de sensibilidad métrica (típicamente $\alpha = 1000$). Su acotamiento exponencial en $[0, 1]$ reduce la vulnerabilidad ante *outliers* extremos.
+
+
+
+**C. Hausdorff Distance (HD)**
+
+Evalúa el error en el peor de los casos, proporcionando una cota superior para la desviación geométrica máxima entre la superficie predicha y la real:
+
+$$HD_{sym}(P, Q) = \max \left( \max_{p \in P} \min_{q \in Q} \Vert{}p - q\Vert{}_2, \; \max_{q \in Q} \min_{p \in P} \Vert{}q - p\Vert{}_2 \right)$$
+
+Un valor reducido ($HD \to 0$) certifica que ningún punto estimado se localiza excesivamente alejado de la superficie subyacente.
+
+---
+
+#### 1.1.2 Métricas de Fidelidad Topográfica y Morfología
+
+**A. Unoriented Normal Angle Error (UNAE)**
+
+Evalúa la preservación de pendientes y quiebres del terreno mediante la coherencia angular entre las normales unitarias estimadas del plano tangente local ($\mathbf{n}_p$) y sus correspondencias limpias ($\mathbf{n}_{\hat{q}}$):
+
+$$UNAE(P, Q) = \frac{1}{\vert{}P\vert{}} \sum_{p \in P} \arccos(\vert{}\mathbf{n}_p \cdot \mathbf{n}_{\hat{q}}\vert{})$$
+
+* El ángulo $\theta \in [0, \pi/2]$ rad utiliza el valor absoluto del producto escalar para garantizar la invariancia frente a la ambigüedad de signo vectorial ($\mathbf{n} \equiv -\mathbf{n}$) en superficies no orientadas.
+
+* Las normales son calculadas por PCA sobre los $k$ vecinos más cercanos imponiendo restricción cenital ($n_z \ge 0$).
+
+* Si $UNAE \to 0^\circ$, se confirma que rasgos morfológicos críticos (crestas, líneas de vaguada y taludes) no sufrieron degradación por sobre-suavizado.
+
+
+**B. Elevation Root Mean Square Error ($RMSE_z$)**
+
+Evalúa el sesgo vertical absoluto en las cotas altimétricas bajo el esquema de correspondencia punto a punto ($\vert{}P\vert{} = \vert{}Q\vert{} = N$):
+
+$$RMSE_z(P, Q) = \sqrt{\frac{1}{N} \sum_{i=1}^{N} (\hat{z}_i - z_i)^2}$$
+
+donde $\hat{z}_i$ es la elevación predicha y $z_i$ es la cota de ground truth en metros. Su minimización ($RMSE_z \to 0$) asegura la integridad en el cálculo de volúmenes de tierra y en la generación de Modelos Digitales de Elevación (DEM).
+
 ## 2. Estructura del Proyecto
 
 El código está modularizado para garantizar reproducibilidad y aislamiento de responsabilidades:
