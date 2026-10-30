@@ -54,23 +54,49 @@ def plot_profile_statistics(points, intensity, classes, counts, nn_distances, sa
 def plot_patch_diagnostics(clean_vis, noisy_vis, delta, delta_vis, axes_mode, sigma, noise_seed, amplify, output_path):
     z_min = min(clean_vis[:, 2].min(), noisy_vis[:, 2].min())
     z_max = max(clean_vis[:, 2].max(), noisy_vis[:, 2].max())
-    
-    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
-    sc1 = axs[0].scatter(clean_vis[:, 0], clean_vis[:, 1], c=clean_vis[:, 2], s=2, cmap="turbo", vmin=z_min, vmax=z_max, rasterized=True)
+
+    fig, axs = plt.subplots(
+        1, 3,
+        figsize=(18, 5.5),
+        constrained_layout=True
+    )
+
+    # 1. Patch limpio
+    sc1 = axs[0].scatter(
+        clean_vis[:, 0], clean_vis[:, 1],
+        c=clean_vis[:, 2], s=2, cmap="turbo",
+        vmin=z_min, vmax=z_max, rasterized=True
+    )
     axs[0].set_title("Patch limpio")
     axs[0].set_aspect("equal", adjustable="box")
-    
-    axs[1].scatter(noisy_vis[:, 0], noisy_vis[:, 1], c=noisy_vis[:, 2], s=2, cmap="turbo", vmin=z_min, vmax=z_max, rasterized=True)
+
+    # 2. Patch con ruido
+    axs[1].scatter(
+        noisy_vis[:, 0], noisy_vis[:, 1],
+        c=noisy_vis[:, 2], s=2, cmap="turbo",
+        vmin=z_min, vmax=z_max, rasterized=True
+    )
     axs[1].set_title(f"Patch con ruido gaussiano ({axes_mode})")
     axs[1].set_aspect("equal", adjustable="box")
-    
-    fig.colorbar(sc1, ax=axs[:2], label="Elevación Z (m)", shrink=0.8, location="bottom", pad=0.15)
-    
+
+    # 3. Diagnóstico del ruido
     if axes_mode == "xyz":
         for p, d in zip(clean_vis, delta_vis):
-            axs[2].plot([p[0], p[0] + amplify * d[0]], [p[1], p[1] + amplify * d[1]], linewidth=0.5, alpha=0.5)
-        axs[2].scatter(clean_vis[:, 0], clean_vis[:, 1], s=3, label="Posición limpia")
-        axs[2].scatter(clean_vis[:, 0] + amplify * delta_vis[:, 0], clean_vis[:, 1] + amplify * delta_vis[:, 1], s=3, label=f"Desplazamiento XY x{amplify}")
+            axs[2].plot(
+                [p[0], p[0] + amplify * d[0]],
+                [p[1], p[1] + amplify * d[1]],
+                linewidth=0.5, alpha=0.5
+            )
+
+        axs[2].scatter(
+            clean_vis[:, 0], clean_vis[:, 1],
+            s=3, label="Posición limpia"
+        )
+        axs[2].scatter(
+            clean_vis[:, 0] + amplify * delta_vis[:, 0],
+            clean_vis[:, 1] + amplify * delta_vis[:, 1],
+            s=3, label=f"Desplazamiento XY ×{amplify}"
+        )
         axs[2].set_title("Desplazamiento horizontal amplificado")
         axs[2].set_aspect("equal", adjustable="datalim")
         axs[2].legend(markerscale=2, fontsize=8)
@@ -78,38 +104,76 @@ def plot_patch_diagnostics(clean_vis, noisy_vis, delta, delta_vis, axes_mode, si
         axs[2].hist(delta[:, 2], bins=60)
         axs[2].axvline(0, linestyle="--")
         axs[2].set_title("Distribución del ruido vertical")
-    
-    fig.suptitle(f"sigma={sigma:.3f} m | semilla={noise_seed}")
-    fig.tight_layout()
+        axs[2].set_xlabel("Ruido en Z (m)")
+        axs[2].set_ylabel("Frecuencia")
+
+    # Barra de color compartida: debajo de los tres paneles
+    cbar = fig.colorbar(
+        sc1,
+        ax=axs,
+        location="bottom",
+        pad=0.10,
+        shrink=0.75,
+        aspect=40
+    )
+    cbar.set_label("Elevación Z (m)")
+
+    fig.suptitle(
+        f"Diagnóstico del ruido | σ={sigma:.3f} m | semilla={noise_seed}"
+    )
+
     fig.savefig(output_path, dpi=160, bbox_inches="tight")
     plt.show()
     plt.close(fig)
 
+
 def plot_denoising_comparison(clean_points, noisy_points, denoised_points, output_path):
     z_min = min(clean_points[:, 2].min(), noisy_points[:, 2].min())
     z_max = max(clean_points[:, 2].max(), noisy_points[:, 2].max())
-    
-    fig, axs = plt.subplots(1, 3, figsize=(18, 5))
-    
-    # 1. Limpio
-    sc1 = axs[0].scatter(clean_points[:, 0], clean_points[:, 1], c=clean_points[:, 2], s=2, cmap="turbo", vmin=z_min, vmax=z_max, rasterized=True)
-    axs[0].set_title("1. Original / Limpio")
-    axs[0].set_aspect("equal", adjustable="datalim")
-    
-    # 2. Con Ruido
-    axs[1].scatter(noisy_points[:, 0], noisy_points[:, 1], c=noisy_points[:, 2], s=2, cmap="turbo", vmin=z_min, vmax=z_max, rasterized=True)
-    axs[1].set_title("2. Corrompido (Ruido + Outliers)")
-    axs[1].set_aspect("equal", adjustable="datalim")
-    
-    # 3. Denoised (MLS)
-    axs[2].scatter(denoised_points[:, 0], denoised_points[:, 1], c=denoised_points[:, 2], s=2, cmap="turbo", vmin=z_min, vmax=z_max, rasterized=True)
-    axs[2].set_title("3. Denoising: Moving Least Squares")
-    axs[2].set_aspect("equal", adjustable="datalim")
-    
-    fig.colorbar(sc1, ax=axs.ravel().tolist(), label="Elevación Z (m)", shrink=0.5, location="bottom", pad=0.15)
-    fig.suptitle("Evaluación de Denoising: MLS Clásico", fontsize=16)
-    
-    fig.tight_layout()
+
+    fig, axs = plt.subplots(
+        1, 3,
+        figsize=(18, 5.5),
+        constrained_layout=True
+    )
+
+    titles = [
+        "1. Original / Limpio",
+        "2. Corrompido (Ruido + Outliers)",
+        "3. Denoising: Moving Least Squares"
+    ]
+
+    datasets = [clean_points, noisy_points, denoised_points]
+
+    for ax, points, title in zip(axs, datasets, titles):
+        sc = ax.scatter(
+            points[:, 0], points[:, 1],
+            c=points[:, 2],
+            s=2,
+            cmap="turbo",
+            vmin=z_min,
+            vmax=z_max,
+            rasterized=True
+        )
+        ax.set_title(title)
+        ax.set_aspect("equal", adjustable="datalim")
+
+    # Barra de color común
+    cbar = fig.colorbar(
+        sc,
+        ax=axs,
+        location="bottom",
+        pad=0.10,
+        shrink=0.75,
+        aspect=40
+    )
+    cbar.set_label("Elevación Z (m)")
+
+    fig.suptitle(
+        "Evaluación de Denoising: MLS Clásico",
+        fontsize=16
+    )
+
     fig.savefig(output_path, dpi=160, bbox_inches="tight")
     plt.show()
     plt.close(fig)
