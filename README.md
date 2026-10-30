@@ -27,15 +27,11 @@ Esta investigación desarrolla un pipeline computacional supervisado de aprendiz
 
 1. Segmentación y normalización espacial de nubes masivas mediante parches locales (*local patches*).
 
-
 2. Inyección y control estructurado de modelos estocásticos de ruido (Gaussiano, Laplaciano y valores atípicos / *outliers*).
-
 
 3. Proyección mediante regresión de vectores de desplazamiento 3D (sin eliminar puntos válidos ni alterar la cardinalidad de la superficie) combinada con podas de *outliers*.
 
-
 4. Optimización multiobjetivo con restricciones geométricas que salvaguarden cotas altimétricas ($RMSE_z$), consistencia de pendientes ($UNAE$) y dispersión volumétrica ($DCD$, $HD$).
-
 
 Este repositorio implementa la fase experimental base: caracterización estadística de datasets LiDAR, simulación estocástica de degradaciones controladas y evaluación de algoritmos clásicos de referencia (*Moving Least Squares*).
 
@@ -48,19 +44,27 @@ El código está modularizado para garantizar reproducibilidad y aislamiento de 
 ```text
 .
 ├── data/                                 # Datasets crudos LiDAR (.laz / .las)
-│   └── Sunset_Crater_Volcano_National_Monument_80M/
+│   └── Sunset_Crater_Volcano_National_Monument_1M/
 │       └── points.laz
 ├── analytics/                            # Salidas gráficas, diagnósticos y datos .npz
-│   └── Sunset_Crater_Volcano_National_Monument_80M/
+│   └── Sunset_Crater_Volcano_National_Monument_1M/
 │       ├── profile_statistics.png
 │       ├── patch_gaussian_diagnostic.png
 │       ├── patch_gaussian_data.npz
 │       └── denoising_mls_comparison.png
+├── models/                               # Modelos a comparación
+│   └── Sunset_Crater_Volcano_National_Monument_1M/
+│       ├── moving_least_squares.py       # Baseline clásico
+│       └── ...
+├── metrics/                              # Implementaciones de métricas comparativas
+│   ├── chamfer_distance.py
+│   ├── hausdorff_distance.py
+│   ├── rmse_z.py
+│   └── unae.py
 ├── config.py                             # Hiperparámetros, rutas y semillas reproducibles
 ├── data_loader.py                        # Ingesta de archivos LAS/LAZ y metadatos
 ├── stats.py                              # Cálculos de extensión, densidad y KD-Trees
 ├── experiment.py                         # Extracción de parches e inyección de ruido
-├── denoising.py                          # Algoritmos de restauración (MLS 1er orden)
 ├── visualization.py                      # Renders 3D Open3D y diagnósticos Matplotlib
 ├── main.py                               # Orquestador del pipeline
 └── README.md
