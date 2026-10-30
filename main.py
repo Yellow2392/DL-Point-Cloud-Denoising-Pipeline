@@ -3,7 +3,7 @@ import config as cfg
 from data_loader import load_las_data, print_metadata
 from stats import calculate_spatial_extent, calculate_density, print_stats, calculate_nearest_neighbor
 from visualization import render_3d_heatmap, plot_profile_statistics, plot_patch_diagnostics, plot_denoising_comparison
-from experiment import extract_patch, apply_gaussian_noise, apply_laplacian_noise, inject_outliers
+from experiment import extract_patch, apply_noise, describe_noise, inject_outliers
 from models.moving_least_squares import moving_least_squares_1st_order, estimate_bandwidth
 from metrics.evaluation import evaluate, print_metrics_table, save_metrics_csv
 
@@ -30,13 +30,15 @@ def main():
     stats_plot_path = cfg.OUTPUT_DIR / "profile_statistics.png"
     plot_profile_statistics(points, intensity, classes, counts, nn_distances, sample_size, cfg.TERRAIN, stats_plot_path)
     """
-    # 4. Experimento: Patch y Ruido Gaussiano
+    # 4. Experimento: Patch y ruido posicional
     print("\n" + "=" * 70 + "\nPATCH LOCAL + INYECCIÓN DE RUIDO\n" + "=" * 70)
     patch_clean, patch_indices, center = extract_patch(points, cfg.PATCH_SIZE, cfg.MIN_POINTS, cfg.MAX_ATTEMPTS, cfg.PATCH_SEED)
-    
-    # Aplicar ruido a elección (Gaussiano o Laplaciano)
-    # patch_noisy, delta, delta_norm = apply_gaussian_noise(patch_clean, cfg.NOISE_SIGMA, cfg.NOISE_AXES, cfg.NOISE_SEED)
-    patch_noisy, delta, delta_norm = apply_laplacian_noise(patch_clean, cfg.NOISE_LAPLACE_SCALE, cfg.NOISE_AXES, cfg.NOISE_SEED)
+
+    # Aplicar el ruido seleccionado en config (Gaussiano o Laplaciano)
+    patch_noisy, delta, delta_norm = apply_noise(
+        patch_clean, cfg.NOISE_TYPE, cfg.NOISE_SIGMA, cfg.NOISE_LAPLACE_SCALE, cfg.NOISE_AXES, cfg.NOISE_SEED
+    )
+    noise_label = describe_noise(cfg.NOISE_TYPE, cfg.NOISE_SIGMA, cfg.NOISE_LAPLACE_SCALE)
     
     # Inyectar outliers al patch ruidoso
     patch_corrupted, is_outlier = inject_outliers(patch_noisy, cfg.OUTLIER_TYPE, cfg.OUTLIER_RATIO, cfg.NOISE_SEED)
@@ -74,22 +76,26 @@ def main():
     }
     print_metrics_table(results)
 
-    metrics_path = cfg.OUTPUT_DIR / "metrics_mls.csv"
+    metrics_path = cfg.OUTPUT_DIR / f"metrics_mls_{cfg.NOISE_TYPE}.csv"
     save_metrics_csv(results, metrics_path)
     print(f"\nMétricas guardadas en {metrics_path}")
-    
-    # Generar visualización del denoising
-    plot_denoising_path = cfg.OUTPUT_DIR / "denoising_mls_comparison.png"
 
-    # Submuestreo para graficar sin colapsar la memoria/vista
-    n_vis = min(cfg.MAX_DISPLAY, len(patch_clean))
-    idx_vis = np.random.default_rng(123).choice(len(patch_clean), n_vis, replace=False)
-    
-    # Asumiremos visualizar las mismas proporciones
+    # Generar visualización del denoising
+    plot_denoising_path = cfg.OUTPUT_DIR / f"denoising_mls_comparison_{cfg.NOISE_TYPE}.png"
+
+    # Submuestreo para graficar sin colapsar la memoria/vista.
+    # Las nubes corrompida y restaurada se muestrean sobre todos sus puntos (outliers incluidos,
+    # que están al final del array); la limpia, por separado sobre los suyos.
+    rng_vis = np.random.default_rng(123)
+    idx_clean_vis = rng_vis.choice(len(patch_clean), min(cfg.MAX_DISPLAY, len(patch_clean)), replace=False)
+    idx_corrupted_vis = rng_vis.choice(len(patch_corrupted), min(cfg.MAX_DISPLAY, len(patch_corrupted)), replace=False)
+
     plot_denoising_comparison(
-        patch_clean[idx_vis], 
-        patch_corrupted[idx_vis], 
-        patch_denoised[idx_vis], 
+        patch_clean[idx_clean_vis],
+        patch_corrupted[idx_corrupted_vis],
+        patch_denoised[idx_corrupted_vis],
+        is_outlier[idx_corrupted_vis],
+        noise_label,
         plot_denoising_path
     )
 
@@ -97,18 +103,19 @@ def main():
     # Preparar visualización (Asegurar que delta solo aplique a los puntos no-espurios en visualization.py)
     n_vis = min(cfg.MAX_DISPLAY, len(patch_clean))
     idx_vis = np.random.default_rng(123).choice(len(patch_clean), n_vis, replace=False)
-    
-    plot_path = cfg.OUTPUT_DIR / "patch_gaussian_diagnostic.png"
+
+    plot_path = cfg.OUTPUT_DIR / f"patch_{cfg.NOISE_TYPE}_diagnostic.png"
     plot_patch_diagnostics(
-        patch_clean[idx_vis], patch_noisy[idx_vis], delta, delta[idx_vis], 
-        cfg.NOISE_AXES, cfg.NOISE_SIGMA, cfg.NOISE_SEED, cfg.AMPLIFY, plot_path
+        patch_clean[idx_vis], patch_noisy[idx_vis], delta, delta[idx_vis],
+        cfg.NOISE_AXES, noise_label, cfg.NOISE_SEED, cfg.AMPLIFY, plot_path
     )
-    
+
     # Guardar artefactos de experimento
-    data_path = cfg.OUTPUT_DIR / "patch_gaussian_data.npz"
+    data_path = cfg.OUTPUT_DIR / f"patch_{cfg.NOISE_TYPE}_data.npz"
     np.savez_compressed(
         data_path, clean=patch_clean, noisy=patch_noisy, source_indices=patch_indices,
-        sigma=np.array(cfg.NOISE_SIGMA), axes=np.array(cfg.NOISE_AXES), patch_size=np.array(cfg.PATCH_SIZE)
+        noise_type=np.array(cfg.NOISE_TYPE), sigma=np.array(cfg.NOISE_SIGMA),
+        laplace_scale=np.array(cfg.NOISE_LAPLACE_SCALE), axes=np.array(cfg.NOISE_AXES), patch_size=np.array(cfg.PATCH_SIZE)
     )
     print(f"Ejecución finalizada. Datos guardados en {cfg.OUTPUT_DIR}")
     """

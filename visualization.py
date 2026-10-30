@@ -51,7 +51,7 @@ def plot_profile_statistics(points, intensity, classes, counts, nn_distances, sa
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.show()
 
-def plot_patch_diagnostics(clean_vis, noisy_vis, delta, delta_vis, axes_mode, sigma, noise_seed, amplify, output_path):
+def plot_patch_diagnostics(clean_vis, noisy_vis, delta, delta_vis, axes_mode, noise_label, noise_seed, amplify, output_path):
     z_min = min(clean_vis[:, 2].min(), noisy_vis[:, 2].min())
     z_max = max(clean_vis[:, 2].max(), noisy_vis[:, 2].max())
 
@@ -76,7 +76,7 @@ def plot_patch_diagnostics(clean_vis, noisy_vis, delta, delta_vis, axes_mode, si
         c=noisy_vis[:, 2], s=2, cmap="turbo",
         vmin=z_min, vmax=z_max, rasterized=True
     )
-    axs[1].set_title(f"Patch con ruido gaussiano ({axes_mode})")
+    axs[1].set_title(f"Patch con ruido {noise_label} ({axes_mode})")
     axs[1].set_aspect("equal", adjustable="box")
 
     # 3. Diagnóstico del ruido
@@ -119,7 +119,7 @@ def plot_patch_diagnostics(clean_vis, noisy_vis, delta, delta_vis, axes_mode, si
     cbar.set_label("Elevación Z (m)")
 
     fig.suptitle(
-        f"Diagnóstico del ruido | σ={sigma:.3f} m | semilla={noise_seed}"
+        f"Diagnóstico del ruido | {noise_label} | semilla={noise_seed}"
     )
 
     fig.savefig(output_path, dpi=160, bbox_inches="tight")
@@ -127,9 +127,11 @@ def plot_patch_diagnostics(clean_vis, noisy_vis, delta, delta_vis, axes_mode, si
     plt.close(fig)
 
 
-def plot_denoising_comparison(clean_points, noisy_points, denoised_points, output_path):
-    z_min = min(clean_points[:, 2].min(), noisy_points[:, 2].min())
-    z_max = max(clean_points[:, 2].max(), noisy_points[:, 2].max())
+def plot_denoising_comparison(clean_points, noisy_points, denoised_points, is_outlier, noise_label, output_path):
+    # La escala de color se fija con la nube limpia: si incluyera los outliers (flotando varios metros
+    # sobre el terreno) comprimiría el relieve en pocos colores. Los outliers se dibujan aparte.
+    z_min = clean_points[:, 2].min()
+    z_max = clean_points[:, 2].max()
 
     fig, axs = plt.subplots(
         1, 3,
@@ -143,18 +145,29 @@ def plot_denoising_comparison(clean_points, noisy_points, denoised_points, outpu
         "3. Denoising: Moving Least Squares"
     ]
 
-    datasets = [clean_points, noisy_points, denoised_points]
+    no_outliers = np.zeros(len(clean_points), dtype=bool)
+    datasets = [(clean_points, no_outliers), (noisy_points, is_outlier), (denoised_points, is_outlier)]
 
-    for ax, points, title in zip(axs, datasets, titles):
+    for ax, (points, outlier_mask), title in zip(axs, datasets, titles):
+        inliers = points[~outlier_mask]
         sc = ax.scatter(
-            points[:, 0], points[:, 1],
-            c=points[:, 2],
+            inliers[:, 0], inliers[:, 1],
+            c=inliers[:, 2],
             s=2,
             cmap="turbo",
             vmin=z_min,
             vmax=z_max,
             rasterized=True
         )
+        if outlier_mask.any():
+            outliers = points[outlier_mask]
+            ax.scatter(
+                outliers[:, 0], outliers[:, 1],
+                s=8, c="magenta", marker="x", linewidths=0.6,
+                label=f"Outliers ({outlier_mask.sum():,} mostrados)",
+                rasterized=True, zorder=3
+            )
+            ax.legend(loc="upper right", fontsize=8, markerscale=1.5)
         ax.set_title(title)
         ax.set_aspect("equal", adjustable="datalim")
 
@@ -170,7 +183,7 @@ def plot_denoising_comparison(clean_points, noisy_points, denoised_points, outpu
     cbar.set_label("Elevación Z (m)")
 
     fig.suptitle(
-        "Evaluación de Denoising: MLS Clásico",
+        f"Evaluación de Denoising: MLS Clásico | Ruido {noise_label}",
         fontsize=16
     )
 

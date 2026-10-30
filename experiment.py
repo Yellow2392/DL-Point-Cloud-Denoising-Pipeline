@@ -58,6 +58,20 @@ def apply_laplacian_noise(patch_clean, scale, axes_mode, seed):
     
     return patch_noisy, delta, delta_norm
 
+def apply_noise(patch_clean, noise_type, sigma, laplace_scale, axes_mode, seed):
+    # Selecciona el modelo de ruido posicional según NOISE_TYPE
+    if noise_type == "gaussian":
+        return apply_gaussian_noise(patch_clean, sigma, axes_mode, seed)
+    if noise_type == "laplacian":
+        return apply_laplacian_noise(patch_clean, laplace_scale, axes_mode, seed)
+    raise ValueError("NOISE_TYPE debe ser 'gaussian' o 'laplacian'.")
+
+def describe_noise(noise_type, sigma, laplace_scale):
+    # Etiqueta legible del ruido aplicado, para títulos de gráficos
+    if noise_type == "gaussian":
+        return f"Gaussiano σ={sigma:.3f} m"
+    return f"Laplaciano b={laplace_scale:.3f} m"
+
 def inject_outliers(patch, outlier_type, ratio, seed):
     rng = np.random.default_rng(seed)
     n_outliers = int(len(patch) * ratio)
