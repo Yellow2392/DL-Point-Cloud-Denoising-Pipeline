@@ -4,7 +4,8 @@ from data_loader import load_las_data, print_metadata
 from stats import calculate_spatial_extent, calculate_density, print_stats, calculate_nearest_neighbor
 from visualization import render_3d_heatmap, plot_profile_statistics, plot_patch_diagnostics, plot_denoising_comparison
 from experiment import extract_patch, apply_gaussian_noise, apply_laplacian_noise, inject_outliers
-from models.moving_least_squares import moving_least_squares_1st_order
+from models.moving_least_squares import moving_least_squares_1st_order, estimate_bandwidth
+from metrics.evaluation import evaluate, print_metrics_table, save_metrics_csv
 
 def main():
     # 1. Carga de datos
@@ -42,24 +43,40 @@ def main():
 
     # 5. Denoising: Aplicación de Moving Least Squares
     print("\n" + "=" * 70 + "\nDENOISING: MOVING LEAST SQUARES (MLS)\n" + "=" * 70)
-    print(f"Iniciando MLS con {cfg.MLS_K_NEIGHBORS} vecinos y h={cfg.MLS_H_PARAM}...")
-    
+    # El ancho de banda se estima sobre la nube corrompida: la referencia limpia no está disponible en la práctica
+    h_param = cfg.MLS_H_PARAM
+    if h_param is None:
+        h_param, spacing = estimate_bandwidth(patch_corrupted, cfg.MLS_H_FACTOR)
+        print(f"Espaciado mediano entre vecinos: {spacing:.4f} m -> h = {cfg.MLS_H_FACTOR} × espaciado")
+    print(f"Iniciando MLS con {cfg.MLS_K_NEIGHBORS} vecinos y h={h_param:.4f} m...")
+
     # Aplicamos MLS a la nube corrompida
     patch_denoised = moving_least_squares_1st_order(
-        patch_corrupted, 
-        k_neighbors=cfg.MLS_K_NEIGHBORS, 
-        h_param=cfg.MLS_H_PARAM
+        patch_corrupted,
+        k_neighbors=cfg.MLS_K_NEIGHBORS,
+        h_param=h_param
     )
-    
-    # Calculamos la distancia RMSE global (simplificada) para reportar en consola
-    # Evaluamos solo sobre los puntos verdaderos para ver si los reubicó correctamente
-    # (los outliers severos en MLS requerirían métodos estadísticos adicionales previos)
+
+    # 6. Métricas frente a la nube de referencia limpia
+    # Las filas "(inliers)" excluyen los outliers inyectados: MLS no elimina puntos, solo los proyecta,
+    # así que comparar ambas variantes separa el efecto del suavizado del de los outliers remanentes.
+    print("\n" + "=" * 70 + "\nMÉTRICAS FRENTE A LA REFERENCIA\n" + "=" * 70)
     valid_points_mask = ~is_outlier
-    rmse_before = np.sqrt(np.mean(np.sum((patch_corrupted[valid_points_mask] - patch_clean)**2, axis=1)))
-    rmse_after = np.sqrt(np.mean(np.sum((patch_denoised[valid_points_mask] - patch_clean)**2, axis=1)))
-    
-    print(f"RMSE inicial (solo ruido): {rmse_before:.4f} m")
-    print(f"RMSE tras MLS: {rmse_after:.4f} m")
+    clouds = {
+        "Corrompida": patch_corrupted,
+        "MLS": patch_denoised,
+        "Corrompida (inliers)": patch_corrupted[valid_points_mask],
+        "MLS (inliers)": patch_denoised[valid_points_mask],
+    }
+    results = {
+        name: evaluate(cloud, patch_clean, cfg.DCD_ALPHA, cfg.NORMAL_K_NEIGHBORS)
+        for name, cloud in clouds.items()
+    }
+    print_metrics_table(results)
+
+    metrics_path = cfg.OUTPUT_DIR / "metrics_mls.csv"
+    save_metrics_csv(results, metrics_path)
+    print(f"\nMétricas guardadas en {metrics_path}")
     
     # Generar visualización del denoising
     plot_denoising_path = cfg.OUTPUT_DIR / "denoising_mls_comparison.png"

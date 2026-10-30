@@ -34,7 +34,13 @@ OUTLIER_TYPE = "clustered"     # "global" o "clustered"
 # -------------------------------------------------------------------
 # Para MLS
 MLS_K_NEIGHBORS = 40     # Número de vecinos a buscar (k)
-MLS_H_PARAM = 0.08       # Ancho de banda de la función de peso gaussiana (m)
+MLS_H_PARAM = None       # Ancho de banda gaussiano fijo (m); None = automático según el espaciado
+MLS_H_FACTOR = 5.0       # h automático = MLS_H_FACTOR × espaciado mediano entre vecinos de la nube de entrada
+
+# -------------------------------------------------------------------
+# Métricas
+DCD_ALPHA = 10.0         # Sensibilidad a la distancia de la DCD (1/m)
+NORMAL_K_NEIGHBORS = 30  # Vecinos para estimar normales en UNAE
 
 # Inicialización de directorios
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

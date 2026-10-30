@@ -1,8 +1,16 @@
 import numpy as np
 import open3d as o3d
+from metrics.neighbors import knn
+
+def estimate_bandwidth(points, factor):
+    # h proporcional al espaciado mediano entre vecinos de la propia nube de entrada.
+    # Si h es menor que el espaciado, el peso del propio punto (distancia 0) domina y MLS no lo mueve.
+    _, dist = knn(points, points, k=2)
+    spacing = np.median(dist[:, 1])
+    return factor * spacing, spacing
 
 def moving_least_squares_1st_order(points, k_neighbors, h_param):
-    # Proyecta iterativamente los puntos hacia un plano tangente local.
+    # Proyecta cada punto (en una sola pasada) hacia el plano tangente local.
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
     
