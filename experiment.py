@@ -1,4 +1,5 @@
 import numpy as np
+import config as cfg
 
 def extract_patch(points, patch_size, min_points, max_attempts, seed):
     rng = np.random.default_rng(seed)
@@ -65,27 +66,64 @@ def component_seed(seed, component):
     # las combinaciones (resultados comparables) y componentes distintos no comparten la secuencia aleatoria.
     return np.random.SeedSequence([seed, NOISE_COMPONENTS.index(component)])
 
-def generate_outliers(reference, outlier_type, n_outliers, seed):
-    # Los límites se toman de la nube de referencia (inliers), no de outliers previamente inyectados
+def generate_outliers(reference, outlier_type, n_outliers, seed, z_buffer_above=6.0, z_buffer_below=2.0, n_clusters=3):
+    # Global: dispersos en la elevación relativa a la superficie
+    # Clustered: cúmulos acumulados sobre puntos del terreno (como vegetación u obstáculos pequeños)
+    if n_outliers <= 0:
+        return np.empty((0, 3), dtype=np.float64)
+
     rng = np.random.default_rng(seed)
-    outliers = np.zeros((n_outliers, 3))
-    
-    xyz_min = reference.min(axis=0)
-    xyz_max = reference.max(axis=0)
-    
+    n_ref = len(reference)
+    outliers = np.zeros((n_outliers, 3), dtype=np.float64)
+
     if outlier_type == "global":
-        # Dispersos aleatoriamente en el espacio volumétrico
-        outliers[:, 0] = rng.uniform(xyz_min[0], xyz_max[0], n_outliers)
-        outliers[:, 1] = rng.uniform(xyz_min[1], xyz_max[1], n_outliers)
-        outliers[:, 2] = rng.uniform(xyz_min[2], xyz_max[2] + 15.0, n_outliers)
+        # 1. Seleccionamos puntos base de la referencia para muestrear el plano XY y la cota Z local
+        base_indices = rng.choice(n_ref, size=n_outliers, replace=True)
+        base_points = reference[base_indices]
+
+        # Pequeña dispersión en el plano horizontal (XY) dentro del entorno local
+        outliers[:, :2] = base_points[:, :2] + rng.uniform(-1.5, 1.5, size=(n_outliers, 2))
+
+        # 2. Desplazamiento vertical relativo al terreno:
+        # La mayoría (80%) sobre el terreno (polvo, aves, aerosoles) y una fracción (20%) bajo el suelo (multipath)
+        is_above = rng.random(n_outliers) > 0.20
+        dz = np.where(
+            is_above,
+            rng.uniform(0.3, z_buffer_above, size=n_outliers),   # Sobre el suelo
+            rng.uniform(-z_buffer_below, -0.3, size=n_outliers)  # Bajo el suelo (multipath)
+        )
+        outliers[:, 2] = base_points[:, 2] + dz
+
     elif outlier_type == "clustered":
-        # Grupos densos flotando sobre el terreno
-        center = rng.uniform(xyz_min, xyz_max)
-        center[2] = xyz_max[2] + rng.uniform(5.0, 15.0) 
-        outliers = rng.normal(loc=center, scale=1.5, size=(n_outliers, 3))
+        # Distribuir los outliers en k cúmulos pequeños sobre el terreno
+        k = min(n_clusters, n_outliers)
+        counts = np.full(k, n_outliers // k)
+        counts[:n_outliers % k] += 1
+
+        # Elegir k puntos base del terreno como centroides ancla
+        anchor_indices = rng.choice(n_ref, size=k, replace=False)
+        offset = 0
+
+        for count, anchor_idx in zip(counts, anchor_indices):
+            anchor = reference[anchor_idx]
+
+            # El centroide flota a una altura realista sobre el terreno local (ej. 1.5 a 4.5 metros)
+            cluster_center = np.array([
+                anchor[0] + rng.uniform(-2.0, 2.0),
+                anchor[1] + rng.uniform(-2.0, 2.0),
+                anchor[2] + rng.uniform(1.5, 4.5)
+            ])
+
+            # Dispersión del clúster (simulando un arbusto o copa de árbol)
+            # Desviación horizontal de ~0.8m y vertical de ~0.5m
+            cluster_scale = np.array([0.8, 0.8, 0.5])
+            cluster_pts = rng.normal(loc=cluster_center, scale=cluster_scale, size=(count, 3))
+
+            outliers[offset:offset + count] = cluster_pts
+            offset += count
     else:
         raise ValueError("outlier_type debe ser 'global' o 'clustered'")
-    
+
     print(f"Outliers inyectados ({outlier_type}): {n_outliers} puntos")
     return outliers
 
@@ -108,7 +146,15 @@ def degrade_patch(patch_clean, components, sigma, laplace_scale, axes_mode, outl
     # El número de outliers se calcula sobre el patch limpio para que no dependa de otros componentes
     n_outliers = int(len(patch_clean) * outlier_ratio)
     outlier_blocks = [
-        generate_outliers(patch_noisy, outlier_type, n_outliers, component_seed(seed, f"{outlier_type}_outliers"))
+        generate_outliers(
+            reference=patch_noisy,
+            outlier_type=outlier_type,
+            n_outliers=n_outliers,
+            seed=component_seed(seed, f"{outlier_type}_outliers"),
+            z_buffer_above=cfg.OUTLIER_Z_ABOVE,
+            z_buffer_below=cfg.OUTLIER_Z_BELOW,
+            n_clusters=cfg.OUTLIER_CLUSTERS_COUNT
+        )
         for outlier_type in ("global", "clustered")
         if f"{outlier_type}_outliers" in components
     ]

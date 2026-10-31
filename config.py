@@ -30,6 +30,11 @@ NOISE_SEED = 42
 NOISE_LAPLACE_SCALE = 0.15  # Parámetro 'b' para la distribución Laplaciana
 OUTLIER_RATIO = 0.05        # Fracción de puntos espurios a inyectar (por cada tipo de outlier, sobre el patch limpio)
 
+# --- Control de Outliers Topográficos ---
+OUTLIER_Z_ABOVE = 3.0           # Máximo metros sobre la cota local para outliers globales
+OUTLIER_Z_BELOW = 1.5           # Máximo metros bajo la cota local (multipath)
+OUTLIER_CLUSTERS_COUNT = 3      # Cantidad de clústeres independientes para outliers agrupados
+
 # Combinaciones de degradación a experimentar: cada lista es un experimento independiente.
 # Componentes disponibles: "gaussian" (NOISE_SIGMA), "laplacian" (NOISE_LAPLACE_SCALE),
 # "global_outliers" y "clustered_outliers" (OUTLIER_RATIO). Los ruidos posicionales se suman.
