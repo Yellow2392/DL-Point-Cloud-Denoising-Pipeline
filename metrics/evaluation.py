@@ -25,10 +25,13 @@ def print_metrics_table(results):
     for name in names:
         print(f"{name:<{name_width}}  " + "  ".join(f"{results[name][col]:>11.4f}" for col in columns))
 
-def save_metrics_csv(results, output_path):
-    columns = list(next(iter(results.values())))
+def save_summary_csv(all_results, output_path):
+    # all_results: {experimento: {nube: {métrica: valor}}}
+    first_experiment = next(iter(all_results.values()))
+    columns = list(next(iter(first_experiment.values())))
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["nube"] + columns)
-        for name, values in results.items():
-            writer.writerow([name] + [f"{values[col]:.6f}" for col in columns])
+        writer.writerow(["experimento", "nube"] + columns)
+        for experiment, results in all_results.items():
+            for name, values in results.items():
+                writer.writerow([experiment, name] + [f"{values[col]:.6f}" for col in columns])

@@ -27,10 +27,28 @@ MAX_DISPLAY = 5_000      # Puntos para gráficos de diagnóstico
 AMPLIFY = 8              # Amplificación visual del desplazamiento
 NOISE_SEED = 42
 
-NOISE_TYPE = "laplacian"    # "gaussian" (usa NOISE_SIGMA) o "laplacian" (usa NOISE_LAPLACE_SCALE)
 NOISE_LAPLACE_SCALE = 0.15  # Parámetro 'b' para la distribución Laplaciana
-OUTLIER_RATIO = 0.05           # Porcentaje de puntos espurios a inyectar
-OUTLIER_TYPE = "clustered"     # "global" o "clustered"
+OUTLIER_RATIO = 0.05        # Fracción de puntos espurios a inyectar (por cada tipo de outlier, sobre el patch limpio)
+
+# Combinaciones de degradación a experimentar: cada lista es un experimento independiente.
+# Componentes disponibles: "gaussian" (NOISE_SIGMA), "laplacian" (NOISE_LAPLACE_SCALE),
+# "global_outliers" y "clustered_outliers" (OUTLIER_RATIO). Los ruidos posicionales se suman.
+NOISE_COMBINATIONS = [
+    ["gaussian"],
+    ["laplacian"],
+    ["gaussian", "laplacian"],
+    ["gaussian", "clustered_outliers"],
+    ["gaussian", "laplacian", "clustered_outliers"],
+    ["gaussian", "laplacian", "global_outliers", "clustered_outliers"],
+]
+
+# -------------------------------------------------------------------
+# Visualización de resultados
+SHOW_FIGURES = True          # Mostrar las figuras de Matplotlib en pantalla (siempre se guardan en OUTPUT_DIR)
+OPEN3D_VIEWER = True         # Abrir el visor 3D interactivo (limpia vs. degradada vs. MLS) en cada experimento
+VIEW_MAX_POINTS = 100_000    # Puntos del patch mostrados en el visor 3D
+VIEW_MAX_LINES = 3_000       # Vectores de desplazamiento (limpio -> degradado) mostrados en el visor 3D
+VIEW_ERROR_AMPLIFY = 1.0     # Amplificación inicial del desplazamiento limpio -> degradado en el visor 3D (ajustable con E/D)
 
 # -------------------------------------------------------------------
 # Para MLS

@@ -58,27 +58,20 @@ def apply_laplacian_noise(patch_clean, scale, axes_mode, seed):
     
     return patch_noisy, delta, delta_norm
 
-def apply_noise(patch_clean, noise_type, sigma, laplace_scale, axes_mode, seed):
-    # Selecciona el modelo de ruido posicional según NOISE_TYPE
-    if noise_type == "gaussian":
-        return apply_gaussian_noise(patch_clean, sigma, axes_mode, seed)
-    if noise_type == "laplacian":
-        return apply_laplacian_noise(patch_clean, laplace_scale, axes_mode, seed)
-    raise ValueError("NOISE_TYPE debe ser 'gaussian' o 'laplacian'.")
+NOISE_COMPONENTS = ("gaussian", "laplacian", "global_outliers", "clustered_outliers")
 
-def describe_noise(noise_type, sigma, laplace_scale):
-    # Etiqueta legible del ruido aplicado, para títulos de gráficos
-    if noise_type == "gaussian":
-        return f"Gaussiano σ={sigma:.3f} m"
-    return f"Laplaciano b={laplace_scale:.3f} m"
+def component_seed(seed, component):
+    # Semilla independiente por componente: un mismo componente genera idéntica perturbación en todas
+    # las combinaciones (resultados comparables) y componentes distintos no comparten la secuencia aleatoria.
+    return np.random.SeedSequence([seed, NOISE_COMPONENTS.index(component)])
 
-def inject_outliers(patch, outlier_type, ratio, seed):
+def generate_outliers(reference, outlier_type, n_outliers, seed):
+    # Los límites se toman de la nube de referencia (inliers), no de outliers previamente inyectados
     rng = np.random.default_rng(seed)
-    n_outliers = int(len(patch) * ratio)
     outliers = np.zeros((n_outliers, 3))
     
-    xyz_min = patch.min(axis=0)
-    xyz_max = patch.max(axis=0)
+    xyz_min = reference.min(axis=0)
+    xyz_max = reference.max(axis=0)
     
     if outlier_type == "global":
         # Dispersos aleatoriamente en el espacio volumétrico
@@ -92,12 +85,51 @@ def inject_outliers(patch, outlier_type, ratio, seed):
         outliers = rng.normal(loc=center, scale=1.5, size=(n_outliers, 3))
     else:
         raise ValueError("outlier_type debe ser 'global' o 'clustered'")
-        
-    patch_with_outliers = np.vstack((patch, outliers))
-    
-    # Máscara booleana para identificar los outliers inyectados
-    is_outlier = np.zeros(len(patch_with_outliers), dtype=bool)
-    is_outlier[-n_outliers:] = True
     
     print(f"Outliers inyectados ({outlier_type}): {n_outliers} puntos")
-    return patch_with_outliers, is_outlier
+    return outliers
+
+def degrade_patch(patch_clean, components, sigma, laplace_scale, axes_mode, outlier_ratio, seed):
+    # Aplica una combinación de degradaciones: primero el ruido posicional (los componentes se suman)
+    # y luego se añaden los outliers al final del array.
+    # Devuelve la nube degradada, la máscara de outliers y el desplazamiento de los puntos originales.
+    unknown = set(components) - set(NOISE_COMPONENTS)
+    if not components or unknown:
+        raise ValueError(f"Componentes de ruido inválidos: {sorted(unknown) or 'lista vacía'}. "
+                         f"Opciones: {NOISE_COMPONENTS}")
+    
+    patch_noisy = patch_clean.copy()
+    if "gaussian" in components:
+        patch_noisy, _, _ = apply_gaussian_noise(patch_noisy, sigma, axes_mode, component_seed(seed, "gaussian"))
+    if "laplacian" in components:
+        patch_noisy, _, _ = apply_laplacian_noise(patch_noisy, laplace_scale, axes_mode, component_seed(seed, "laplacian"))
+    delta = patch_noisy - patch_clean
+    
+    # El número de outliers se calcula sobre el patch limpio para que no dependa de otros componentes
+    n_outliers = int(len(patch_clean) * outlier_ratio)
+    outlier_blocks = [
+        generate_outliers(patch_noisy, outlier_type, n_outliers, component_seed(seed, f"{outlier_type}_outliers"))
+        for outlier_type in ("global", "clustered")
+        if f"{outlier_type}_outliers" in components
+    ]
+    patch_degraded = np.vstack([patch_noisy] + outlier_blocks)
+    
+    # Máscara booleana para identificar los outliers inyectados
+    is_outlier = np.zeros(len(patch_degraded), dtype=bool)
+    is_outlier[len(patch_noisy):] = True
+    
+    return patch_degraded, is_outlier, delta
+
+def experiment_name(components):
+    # Identificador para nombres de archivo y tablas, p. ej. "gaussian+clustered_outliers"
+    return "+".join(components)
+
+def describe_degradation(components, sigma, laplace_scale, outlier_ratio):
+    # Etiqueta legible de la degradación aplicada, para títulos de gráficos
+    labels = {
+        "gaussian": f"Gaussiano σ={sigma:.3f} m",
+        "laplacian": f"Laplaciano b={laplace_scale:.3f} m",
+        "global_outliers": f"Outliers globales {outlier_ratio:.0%}",
+        "clustered_outliers": f"Outliers agrupados {outlier_ratio:.0%}",
+    }
+    return " + ".join(labels[c] for c in components)
