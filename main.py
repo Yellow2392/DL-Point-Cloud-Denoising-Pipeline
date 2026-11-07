@@ -1,3 +1,4 @@
+import importlib.util
 import numpy as np
 import config as cfg
 from data_loader import load_las_data, print_metadata
@@ -8,6 +9,10 @@ from models.statistical_outlier_removal import statistical_outlier_removal
 from models.moving_least_squares import moving_least_squares_1st_order, estimate_bandwidth
 from metrics.evaluation import evaluate, print_metrics_table, save_summary_csv
 from metrics.outlier_detection import outlier_detection_metrics
+
+# Nombres de los métodos de cada fase en tablas y figuras
+PHASE1_LABELS = {"sor": "SOR", "mamba": "Mamba-cls", "none": "Sin poda"}
+PHASE2_LABELS = {"mls": "MLS", "mamba": "Mamba-reg", "none": "Sin suavizado"}
 
 def main():
     # 1. Carga de datos
@@ -37,11 +42,12 @@ def main():
     patch_clean, patch_indices, center = extract_patch(points, cfg.PATCH_SIZE, cfg.MIN_POINTS, cfg.MAX_ATTEMPTS, cfg.PATCH_SEED)
     print(f"Patch de {cfg.PATCH_SIZE} m centrado en {center}: {len(patch_clean):,} puntos")
 
+    pipelines = available_pipelines()
     all_results = {}
     all_detection = {}
     for components in cfg.NOISE_COMBINATIONS:
         name = experiment_name(components)
-        all_results[name], all_detection[name] = run_experiment(patch_clean, patch_indices, components)
+        all_results[name], all_detection[name] = run_experiment(patch_clean, patch_indices, components, pipelines)
 
     # 8. Resumen de todas las combinaciones
     print("\n" + "=" * 70 + "\nRESUMEN DE EXPERIMENTOS\n" + "=" * 70)
@@ -54,13 +60,84 @@ def main():
     save_summary_csv(all_results, summary_path)
     print(f"\nResumen guardado en {summary_path}")
 
-    print("\n" + "=" * 70 + "\nRESUMEN FASE 1: DETECCIÓN DE OUTLIERS (SOR)\n" + "=" * 70)
-    print_metrics_table(all_detection)
-    detection_path = cfg.OUTPUT_DIR / "outlier_removal_summary.csv"
-    save_summary_csv({name: {"SOR": metrics} for name, metrics in all_detection.items()}, detection_path)
-    print(f"\nResumen guardado en {detection_path}")
+    all_detection = {name: detection for name, detection in all_detection.items() if detection}
+    if all_detection:
+        print("\n" + "=" * 70 + "\nRESUMEN FASE 1: DETECCIÓN DE OUTLIERS\n" + "=" * 70)
+        print_metrics_table({
+            f"{name} | {method}": metrics
+            for name, detection in all_detection.items()
+            for method, metrics in detection.items()
+        })
+        detection_path = cfg.OUTPUT_DIR / "outlier_removal_summary.csv"
+        save_summary_csv(all_detection, detection_path)
+        print(f"\nResumen guardado en {detection_path}")
 
-def run_experiment(patch_clean, patch_indices, components):
+def available_pipelines():
+    # Descarta (con aviso) los pipelines que usan 3DMambaIPF si falta PyTorch o el checkpoint entrenado,
+    # para que el resto de la evaluación funcione también en equipos sin el entorno de deep learning.
+    checkpoints = {1: cfg.MAMBA_CLASSIFIER_CKPT, 2: cfg.MAMBA_REGRESSOR_CKPT}
+    has_torch = importlib.util.find_spec("torch") is not None
+    pipelines = []
+    for phase1, phase2 in cfg.PIPELINES:
+        missing = [
+            f"checkpoint de la fase {phase} ({checkpoints[phase]})"
+            for phase, method in ((1, phase1), (2, phase2))
+            if method == "mamba" and not checkpoints[phase].exists()
+        ]
+        if "mamba" in (phase1, phase2) and not has_torch:
+            missing.insert(0, "PyTorch")
+        if missing:
+            print(f"AVISO: se omite el pipeline {pipeline_label(phase1, phase2)}: falta {', '.join(missing)}")
+        else:
+            pipelines.append((phase1, phase2))
+    return pipelines
+
+def pipeline_label(phase1, phase2):
+    return f"{PHASE1_LABELS[phase1]} + {PHASE2_LABELS[phase2]}"
+
+def run_outlier_removal(method, points):
+    # Fase 1: devuelve los puntos conservados y la máscara de inliers sobre la nube de entrada
+    if method == "sor":
+        kept_points, kept_mask, threshold = statistical_outlier_removal(
+            points, k_neighbors=cfg.SOR_K_NEIGHBORS, std_mul=cfg.SOR_STD_MUL
+        )
+        print(f"SOR con {cfg.SOR_K_NEIGHBORS} vecinos y std_mul={cfg.SOR_STD_MUL}: umbral={threshold:.4f} m")
+    elif method == "mamba":
+        from models.mamba_ipf.inference import mamba_outlier_removal
+        kept_points, kept_mask, _, covered = mamba_outlier_removal(
+            points, cfg.MAMBA_CLASSIFIER_CKPT, threshold=cfg.MAMBA_OUTLIER_THRESHOLD, seed_k=cfg.MAMBA_SEED_K,
+            batch_size=cfg.MAMBA_BATCH_SIZE, device=cfg.MAMBA_DEVICE, mamba_impl=cfg.MAMBA_IMPL
+        )
+        print(f"Clasificador Mamba (umbral {cfg.MAMBA_OUTLIER_THRESHOLD}); puntos sin parche: {np.sum(~covered):,}")
+    elif method == "none":
+        kept_points, kept_mask = points, np.ones(len(points), dtype=bool)
+    else:
+        raise ValueError(f"Método de la fase 1 desconocido: {method}")
+    return kept_points, kept_mask
+
+def run_displacement(method, points):
+    # Fase 2: devuelve la nube con los puntos desplazados (misma cardinalidad y orden)
+    if method == "mls":
+        # El ancho de banda se estima sobre la entrada de MLS: la referencia limpia no está disponible en la práctica
+        h_param = cfg.MLS_H_PARAM
+        if h_param is None:
+            h_param, spacing = estimate_bandwidth(points, cfg.MLS_H_FACTOR)
+            print(f"Espaciado mediano entre vecinos: {spacing:.4f} m -> h = {cfg.MLS_H_FACTOR} × espaciado")
+        print(f"Iniciando MLS con {cfg.MLS_K_NEIGHBORS} vecinos y h={h_param:.4f} m...")
+        return moving_least_squares_1st_order(points, k_neighbors=cfg.MLS_K_NEIGHBORS, h_param=h_param)
+    if method == "mamba":
+        from models.mamba_ipf.inference import mamba_displacement
+        denoised, covered = mamba_displacement(
+            points, cfg.MAMBA_REGRESSOR_CKPT, seed_k=cfg.MAMBA_SEED_K, batch_size=cfg.MAMBA_BATCH_SIZE,
+            niters=cfg.MAMBA_NITERS, device=cfg.MAMBA_DEVICE, mamba_impl=cfg.MAMBA_IMPL
+        )
+        print(f"Regresor Mamba ({cfg.MAMBA_NITERS} pasada/s); puntos sin parche: {np.sum(~covered):,}")
+        return denoised
+    if method == "none":
+        return points.copy()
+    raise ValueError(f"Método de la fase 2 desconocido: {method}")
+
+def run_experiment(patch_clean, patch_indices, components, pipelines):
     name = experiment_name(components)
     noise_label = describe_degradation(components, cfg.NOISE_SIGMA, cfg.NOISE_LAPLACE_SCALE, cfg.OUTLIER_RATIO)
     print("\n" + "#" * 70 + f"\nEXPERIMENTO: {name}\n{noise_label}\n" + "#" * 70)
@@ -70,84 +147,84 @@ def run_experiment(patch_clean, patch_indices, components):
         cfg.NOISE_AXES, cfg.OUTLIER_RATIO, cfg.NOISE_SEED
     )
 
-    # 5. Fase 1: remoción de outliers con Statistical Outlier Removal (SOR)
-    print("\n" + "=" * 70 + "\nFASE 1: STATISTICAL OUTLIER REMOVAL (SOR)\n" + "=" * 70)
-    patch_sor, kept_mask, sor_threshold = statistical_outlier_removal(
-        patch_corrupted,
-        k_neighbors=cfg.SOR_K_NEIGHBORS,
-        std_mul=cfg.SOR_STD_MUL
-    )
-    n_removed = len(patch_corrupted) - len(patch_sor)
-    print(f"SOR con {cfg.SOR_K_NEIGHBORS} vecinos y std_mul={cfg.SOR_STD_MUL}: umbral={sor_threshold:.4f} m")
-    print(f"Puntos eliminados: {n_removed:,} de {len(patch_corrupted):,} ({n_removed / len(patch_corrupted):.2%})")
-
-    detection = outlier_detection_metrics(~kept_mask, is_outlier)
-    print("Detección frente a los outliers inyectados: " + ", ".join(f"{k}={v:.4f}" for k, v in detection.items()))
-
-    # 6. Fase 2: predicción de desplazamientos con Moving Least Squares sobre los puntos conservados
-    print("\n" + "=" * 70 + "\nFASE 2: MOVING LEAST SQUARES (MLS)\n" + "=" * 70)
-    # El ancho de banda se estima sobre la entrada de MLS: la referencia limpia no está disponible en la práctica
-    h_param = cfg.MLS_H_PARAM
-    if h_param is None:
-        h_param, spacing = estimate_bandwidth(patch_sor, cfg.MLS_H_FACTOR)
-        print(f"Espaciado mediano entre vecinos: {spacing:.4f} m -> h = {cfg.MLS_H_FACTOR} × espaciado")
-    print(f"Iniciando MLS con {cfg.MLS_K_NEIGHBORS} vecinos y h={h_param:.4f} m...")
-
-    patch_denoised = moving_least_squares_1st_order(
-        patch_sor,
-        k_neighbors=cfg.MLS_K_NEIGHBORS,
-        h_param=h_param
-    )
-    # Outliers inyectados que sobrevivieron a la fase 1 (alineado con patch_sor y patch_denoised)
-    denoised_is_outlier = is_outlier[kept_mask]
-
-    # 7. Métricas frente a la nube de referencia limpia
-    # Las filas "(inliers)" excluyen los outliers inyectados (en el resultado final, los que SOR no eliminó),
-    # separando el efecto del suavizado del de los outliers remanentes.
-    print("\n" + "=" * 70 + "\nMÉTRICAS FRENTE A LA REFERENCIA\n" + "=" * 70)
-    clouds = {"Corrompida": patch_corrupted, "SOR": patch_sor, "SOR + MLS": patch_denoised}
+    # Las filas "(inliers)" excluyen los outliers inyectados (en el resultado final, los que la fase 1 no
+    # eliminó), separando el efecto del suavizado del de los outliers remanentes.
+    clouds = {"Corrompida": patch_corrupted}
     if is_outlier.any():
         clouds["Corrompida (inliers)"] = patch_corrupted[~is_outlier]
-        clouds["SOR + MLS (inliers)"] = patch_denoised[~denoised_is_outlier]
+    detection = {}
+    outputs = []
+
+    for phase1, phase2 in pipelines:
+        label = pipeline_label(phase1, phase2)
+
+        # 5. Fase 1: poda de outliers
+        print("\n" + "=" * 70 + f"\n{label} | FASE 1: {PHASE1_LABELS[phase1]}\n" + "=" * 70)
+        patch_kept, kept_mask = run_outlier_removal(phase1, patch_corrupted)
+        n_removed = len(patch_corrupted) - len(patch_kept)
+        print(f"Puntos eliminados: {n_removed:,} de {len(patch_corrupted):,} ({n_removed / len(patch_corrupted):.2%})")
+        if phase1 != "none":
+            detection[PHASE1_LABELS[phase1]] = outlier_detection_metrics(~kept_mask, is_outlier)
+            print("Detección frente a los outliers inyectados: " +
+                  ", ".join(f"{k}={v:.4f}" for k, v in detection[PHASE1_LABELS[phase1]].items()))
+
+        # 6. Fase 2: predicción de desplazamientos sobre los puntos conservados
+        print("\n" + "=" * 70 + f"\n{label} | FASE 2: {PHASE2_LABELS[phase2]}\n" + "=" * 70)
+        patch_denoised = run_displacement(phase2, patch_kept)
+        # Outliers inyectados que sobrevivieron a la fase 1 (alineado con patch_kept y patch_denoised)
+        denoised_is_outlier = is_outlier[kept_mask]
+
+        clouds[PHASE1_LABELS[phase1]] = patch_kept
+        clouds[label] = patch_denoised
+        if is_outlier.any():
+            clouds[f"{label} (inliers)"] = patch_denoised[~denoised_is_outlier]
+        outputs.append((phase1, phase2, kept_mask, patch_denoised, denoised_is_outlier))
+
+    # 7. Métricas frente a la nube de referencia limpia
+    print("\n" + "=" * 70 + "\nMÉTRICAS FRENTE A LA REFERENCIA\n" + "=" * 70)
     results = {
         cloud_name: evaluate(cloud, patch_clean, cfg.DCD_ALPHA, cfg.NORMAL_K_NEIGHBORS)
         for cloud_name, cloud in clouds.items()
     }
     print_metrics_table(results)
 
-    # Generar visualización del denoising
-    plot_denoising_path = cfg.OUTPUT_DIR / f"denoising_sor_mls_comparison_{name}.png"
+    for phase1, phase2, kept_mask, patch_denoised, denoised_is_outlier in outputs:
+        label = pipeline_label(phase1, phase2)
 
-    # Submuestreo para graficar sin colapsar la memoria/vista.
-    # Cada nube se muestrea sobre todos sus puntos (outliers incluidos, que están al final del array).
-    rng_vis = np.random.default_rng(123)
-    idx_clean_vis = rng_vis.choice(len(patch_clean), min(cfg.MAX_DISPLAY, len(patch_clean)), replace=False)
-    idx_corrupted_vis = rng_vis.choice(len(patch_corrupted), min(cfg.MAX_DISPLAY, len(patch_corrupted)), replace=False)
-    idx_denoised_vis = rng_vis.choice(len(patch_denoised), min(cfg.MAX_DISPLAY, len(patch_denoised)), replace=False)
+        # Generar visualización del denoising
+        plot_denoising_path = cfg.OUTPUT_DIR / f"denoising_{phase1}_{phase2}_comparison_{name}.png"
 
-    plot_denoising_comparison(
-        patch_clean[idx_clean_vis],
-        patch_corrupted[idx_corrupted_vis],
-        is_outlier[idx_corrupted_vis],
-        patch_denoised[idx_denoised_vis],
-        denoised_is_outlier[idx_denoised_vis],
-        noise_label,
-        plot_denoising_path,
-        show=cfg.SHOW_FIGURES
-    )
+        # Submuestreo para graficar sin colapsar la memoria/vista.
+        # Cada nube se muestrea sobre todos sus puntos (outliers incluidos, que están al final del array).
+        rng_vis = np.random.default_rng(123)
+        idx_clean_vis = rng_vis.choice(len(patch_clean), min(cfg.MAX_DISPLAY, len(patch_clean)), replace=False)
+        idx_corrupted_vis = rng_vis.choice(len(patch_corrupted), min(cfg.MAX_DISPLAY, len(patch_corrupted)), replace=False)
+        idx_denoised_vis = rng_vis.choice(len(patch_denoised), min(cfg.MAX_DISPLAY, len(patch_denoised)), replace=False)
 
-    # Visor 3D interactivo para inspeccionar las diferencias entre la nube limpia y la degradada.
-    # El visor necesita la nube restaurada alineada con la degradada: los puntos eliminados por SOR
-    # conservan su posición degradada y se identifican con kept_mask.
-    if cfg.OPEN3D_VIEWER:
-        restored_aligned = patch_corrupted.copy()
-        restored_aligned[kept_mask] = patch_denoised
-        view_clean_vs_degraded(
-            patch_clean, patch_corrupted, is_outlier, restored_aligned, kept_mask=kept_mask,
-            window_name=f"{cfg.TERRAIN} - {name}",
-            max_points=cfg.VIEW_MAX_POINTS, max_lines=cfg.VIEW_MAX_LINES,
-            error_amplify=cfg.VIEW_ERROR_AMPLIFY, seed=cfg.SEED
+        plot_denoising_comparison(
+            patch_clean[idx_clean_vis],
+            patch_corrupted[idx_corrupted_vis],
+            is_outlier[idx_corrupted_vis],
+            patch_denoised[idx_denoised_vis],
+            denoised_is_outlier[idx_denoised_vis],
+            noise_label,
+            plot_denoising_path,
+            method_label=label,
+            show=cfg.SHOW_FIGURES
         )
+
+        # Visor 3D interactivo para inspeccionar las diferencias entre la nube limpia y la degradada.
+        # El visor necesita la nube restaurada alineada con la degradada: los puntos eliminados en la
+        # fase 1 conservan su posición degradada y se identifican con kept_mask.
+        if cfg.OPEN3D_VIEWER:
+            restored_aligned = patch_corrupted.copy()
+            restored_aligned[kept_mask] = patch_denoised
+            view_clean_vs_degraded(
+                patch_clean, patch_corrupted, is_outlier, restored_aligned, kept_mask=kept_mask,
+                window_name=f"{cfg.TERRAIN} - {name} - {label}",
+                max_points=cfg.VIEW_MAX_POINTS, max_lines=cfg.VIEW_MAX_LINES,
+                error_amplify=cfg.VIEW_ERROR_AMPLIFY, seed=cfg.SEED
+            )
 
     """
     # Preparar visualización (Asegurar que delta solo aplique a los puntos no-espurios en visualization.py)

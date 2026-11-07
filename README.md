@@ -248,6 +248,47 @@ python main.py
 
 El script imprimirá el perfil métrico en consola, abrirá la visualización 3D interactiva y almacenará las figuras y arrays resultantes en formato comprimido (`.npz`) dentro de `analytics/<NOMBRE_DEL_TERRAIN>/`.
 
+---
+
+## 6. Fases de aprendizaje profundo (3DMambaIPF)
+
+`models/mamba_ipf/` adapta el backbone de 3DMambaIPF (EdgeConv + Mamba) a las dos fases del pipeline, como dos instancias independientes:
+
+| Fase | Modelo | Salida | Pérdida |
+|---|---|---|---|
+| 1. Poda | `MambaOutlierClassifier` | logit de outlier por punto → máscara | BCE con peso de clase |
+| 2. Suavizado | `MambaDisplacementRegressor` (4 módulos iterativos) | desplazamiento 3D por punto | vecino limpio más cercano + currículo de ruido |
+
+Los pipelines a comparar se eligen en `PIPELINES` (`config.py`). Si falta PyTorch o algún checkpoint, `main.py` omite los pipelines con `"mamba"` y continúa con el resto.
+
+### Entorno con GPU (entrenamiento)
+
+`mamba-ssm` solo funciona con GPU NVIDIA en **Linux o WSL2**. Combinación de versiones sugerida (la misma serie 1.1.x que usa el 3DMambaIPF original; ajústala a la versión de CUDA del equipo):
+
+```bash
+conda create -n mamba_env python=3.10
+conda activate mamba_env
+pip install torch==2.1.2 --index-url https://download.pytorch.org/whl/cu118
+pip install "numpy<2" mamba-ssm==1.1.3.post1
+pip install "causal-conv1d>=1.1.0"   # opcional: activa el camino rápido de Mamba
+pip install open3d matplotlib "laspy[lazrs]"
+```
+
+Sin `mamba-ssm` (o en CPU) se usa automáticamente una implementación de referencia en PyTorch puro, con los mismos parámetros: sirve para cargar checkpoints y hacer pruebas, pero es demasiado lenta para entrenar.
+
+### Entrenamiento
+
+```bash
+python train_mamba.py prepare                     # ventanas train/val en data/mamba_windows/
+python train_mamba.py train --task classifier     # -> checkpoints/mamba_classifier.pt
+python train_mamba.py train --task regressor      # -> checkpoints/mamba_regressor.pt
+```
+
+- `prepare` corta las escenas de `MAMBA_TRAIN_TERRAINS` en ventanas de `PATCH_SIZE` m y las reparte en train/val/test por ventana completa. Las ventanas que tocan el patch de evaluación de `main.py` quedan siempre fuera del entrenamiento.
+- Cada muestra se degrada al vuelo con `degrade_patch` y las combinaciones de `MAMBA_TRAIN_COMBINATIONS`, con intensidades aleatorias (`MAMBA_NOISE_SCALE_RANGE`).
+- `--init_from <ckpt>` inicializa con los pesos preentrenados del 3DMambaIPF original (PUNet).
+- El registro de cada época se guarda junto al checkpoint (`.csv`). Los checkpoints (`checkpoints/`) no se versionan: hay que copiarlos al equipo donde se ejecute `main.py`.
+
 # Quick Start
 - Ejecutar para activar el entorno virtual sin usar Anaconda Prompt directamente en terminal: `(C:\Users\Soporte\miniconda3\shell\condabin\conda-hook.ps1) ; (conda activate lidar_env)`
 - Usa `Ctrl + Shift + P` para elegir el intérprete de Python en VS Code. 

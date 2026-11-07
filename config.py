@@ -56,6 +56,15 @@ VIEW_MAX_LINES = 5_000       # Vectores de desplazamiento (limpio -> degradado) 
 VIEW_ERROR_AMPLIFY = 1.0     # Amplificación inicial del desplazamiento limpio -> degradado en el visor 3D (ajustable con E/D)
 
 # -------------------------------------------------------------------
+# Pipelines a comparar en cada experimento: (método de la fase 1, método de la fase 2)
+# Fase 1 (poda de outliers): "sor", "mamba" o "none". Fase 2 (desplazamientos): "mls", "mamba" o "none".
+# Los pipelines con "mamba" se omiten (con aviso) si no hay PyTorch o falta el checkpoint entrenado.
+PIPELINES = [
+    ("sor", "mls"),
+    ("mamba", "mamba"),
+]
+
+# -------------------------------------------------------------------
 # Fase 1: remoción de outliers con Statistical Outlier Removal (SOR)
 SOR_K_NEIGHBORS = 30     # Vecinos usados para la distancia media de cada punto
 SOR_STD_MUL = 2.0        # Umbral = media + SOR_STD_MUL × desviación estándar de las distancias medias
@@ -71,6 +80,45 @@ MLS_H_FACTOR = 5.0       # h automático = MLS_H_FACTOR × espaciado mediano ent
 # Métricas
 DCD_ALPHA = 10.0         # Sensibilidad a la distancia de la DCD (1/m)
 NORMAL_K_NEIGHBORS = 30  # Vecinos para estimar normales en UNAE
+
+# -------------------------------------------------------------------
+# 3DMambaIPF: mismo backbone en dos instancias (clasificador de outliers + regresor de desplazamientos)
+MAMBA_DEVICE = "auto"            # "cuda", "cpu" o "auto"
+MAMBA_IMPL = "auto"              # "cuda" (kernels de mamba_ssm), "reference" (PyTorch puro, lento) o "auto"
+MAMBA_CHECKPOINT_DIR = BASE_DIR / "checkpoints"
+MAMBA_CLASSIFIER_CKPT = MAMBA_CHECKPOINT_DIR / "mamba_classifier.pt"
+MAMBA_REGRESSOR_CKPT = MAMBA_CHECKPOINT_DIR / "mamba_regressor.pt"
+MAMBA_PATCH_SIZE = 1000          # Puntos por parche (vecinos kNN de cada semilla)
+MAMBA_K_NEIGHBORS = 32           # Vecinos del grafo de las EdgeConv
+MAMBA_NUM_MODULES = 4            # Redes encadenadas del regresor (refinamiento iterativo)
+MAMBA_SEED_K = 6                 # Solapamiento: semillas = SEED_K × N / PATCH_SIZE
+MAMBA_BATCH_SIZE = 8             # Parches por lote en inferencia
+MAMBA_OUTLIER_THRESHOLD = 0.5    # Probabilidad a partir de la cual un punto se poda
+MAMBA_NITERS = 1                 # Pasadas completas del regresor sobre la nube
+
+# Entrenamiento (train_mamba.py)
+MAMBA_TRAIN_TERRAINS = [
+    "Northern_California_Coast_40M",
+    "San_Isabel_NF_CO_Debris_100M",
+    "Sunset_Crater_Volcano_National_Monument_80M",   # Contiene el área del patch de evaluación: se excluye
+]
+MAMBA_WINDOWS_DIR = DATA_DIR / "mamba_windows"
+MAMBA_WINDOWS_PER_SPLIT = {"train": 40, "val": 6}   # Ventanas de PATCH_SIZE m guardadas por escena
+MAMBA_VAL_FRACTION = 0.1
+MAMBA_TEST_FRACTION = 0.1
+MAMBA_TRAIN_COMBINATIONS = NOISE_COMBINATIONS        # Degradaciones vistas durante el entrenamiento
+MAMBA_NOISE_SCALE_RANGE = (0.5, 1.5)                 # Factor aleatorio sobre σ, b y OUTLIER_RATIO por muestra
+MAMBA_RESIDUAL_OUTLIER_KEEP = 0.1                    # Outliers que el regresor ve en entrenamiento (fallos de la fase 1)
+MAMBA_PATCH_RATIO = 1.2                              # Tamaño del parche limpio objetivo respecto del ruidoso
+MAMBA_NOISE_DECAY = 4                                # Currículo de ruido entre módulos (1 = sin currículo)
+MAMBA_SAMPLES_PER_ITEM = 8                           # Parches extraídos de cada ventana degradada
+MAMBA_TRAIN_ITEMS_PER_EPOCH = 500
+MAMBA_VAL_ITEMS = 60
+MAMBA_TRAIN_BATCH_ITEMS = 1                          # Ventanas por lote (lote efectivo = × SAMPLES_PER_ITEM)
+MAMBA_EPOCHS = 100
+MAMBA_LR = 1e-4
+MAMBA_WEIGHT_DECAY = 0.0
+MAMBA_NUM_WORKERS = 4
 
 # Inicialización de directorios
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

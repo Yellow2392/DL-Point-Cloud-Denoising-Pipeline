@@ -17,7 +17,7 @@ def extract_patch(points, patch_size, min_points, max_attempts, seed):
             
     raise ValueError(f"No se encontró un patch de {patch_size} m con al menos {min_points} puntos.")
 
-def apply_gaussian_noise(patch_clean, sigma, axes_mode, seed):
+def apply_gaussian_noise(patch_clean, sigma, axes_mode, seed, verbose=True):
     rng = np.random.default_rng(seed)
     patch_noisy = patch_clean.copy()
     
@@ -33,12 +33,13 @@ def apply_gaussian_noise(patch_clean, sigma, axes_mode, seed):
     delta = patch_noisy - patch_clean
     delta_norm = np.linalg.norm(delta, axis=1)
     
-    print(f"Sigma configurado: {sigma:.4f} m")
-    print(f"Desplazamiento 3D medio: {delta_norm.mean():.4f} m")
+    if verbose:
+        print(f"Sigma configurado: {sigma:.4f} m")
+        print(f"Desplazamiento 3D medio: {delta_norm.mean():.4f} m")
     
     return patch_noisy, delta, delta_norm
 
-def apply_laplacian_noise(patch_clean, scale, axes_mode, seed):
+def apply_laplacian_noise(patch_clean, scale, axes_mode, seed, verbose=True):
     rng = np.random.default_rng(seed)
     patch_noisy = patch_clean.copy()
     
@@ -54,8 +55,9 @@ def apply_laplacian_noise(patch_clean, scale, axes_mode, seed):
     delta = patch_noisy - patch_clean
     delta_norm = np.linalg.norm(delta, axis=1)
     
-    print(f"Escala Laplaciana configurada (b): {scale:.4f} m")
-    print(f"Desplazamiento 3D medio: {delta_norm.mean():.4f} m")
+    if verbose:
+        print(f"Escala Laplaciana configurada (b): {scale:.4f} m")
+        print(f"Desplazamiento 3D medio: {delta_norm.mean():.4f} m")
     
     return patch_noisy, delta, delta_norm
 
@@ -66,7 +68,7 @@ def component_seed(seed, component):
     # las combinaciones (resultados comparables) y componentes distintos no comparten la secuencia aleatoria.
     return np.random.SeedSequence([seed, NOISE_COMPONENTS.index(component)])
 
-def generate_outliers(reference, outlier_type, n_outliers, seed, z_buffer_above=6.0, z_buffer_below=2.0, n_clusters=3):
+def generate_outliers(reference, outlier_type, n_outliers, seed, z_buffer_above=6.0, z_buffer_below=2.0, n_clusters=3, verbose=True):
     # Global: dispersos en la elevación relativa a la superficie
     # Clustered: cúmulos acumulados sobre puntos del terreno (como vegetación u obstáculos pequeños)
     if n_outliers <= 0:
@@ -124,13 +126,15 @@ def generate_outliers(reference, outlier_type, n_outliers, seed, z_buffer_above=
     else:
         raise ValueError("outlier_type debe ser 'global' o 'clustered'")
 
-    print(f"Outliers inyectados ({outlier_type}): {n_outliers} puntos")
+    if verbose:
+        print(f"Outliers inyectados ({outlier_type}): {n_outliers} puntos")
     return outliers
 
-def degrade_patch(patch_clean, components, sigma, laplace_scale, axes_mode, outlier_ratio, seed):
+def degrade_patch(patch_clean, components, sigma, laplace_scale, axes_mode, outlier_ratio, seed, verbose=True):
     # Aplica una combinación de degradaciones: primero el ruido posicional (los componentes se suman)
     # y luego se añaden los outliers al final del array.
     # Devuelve la nube degradada, la máscara de outliers y el desplazamiento de los puntos originales.
+    # verbose=False silencia los mensajes (generación masiva de muestras de entrenamiento).
     unknown = set(components) - set(NOISE_COMPONENTS)
     if not components or unknown:
         raise ValueError(f"Componentes de ruido inválidos: {sorted(unknown) or 'lista vacía'}. "
@@ -138,9 +142,9 @@ def degrade_patch(patch_clean, components, sigma, laplace_scale, axes_mode, outl
     
     patch_noisy = patch_clean.copy()
     if "gaussian" in components:
-        patch_noisy, _, _ = apply_gaussian_noise(patch_noisy, sigma, axes_mode, component_seed(seed, "gaussian"))
+        patch_noisy, _, _ = apply_gaussian_noise(patch_noisy, sigma, axes_mode, component_seed(seed, "gaussian"), verbose)
     if "laplacian" in components:
-        patch_noisy, _, _ = apply_laplacian_noise(patch_noisy, laplace_scale, axes_mode, component_seed(seed, "laplacian"))
+        patch_noisy, _, _ = apply_laplacian_noise(patch_noisy, laplace_scale, axes_mode, component_seed(seed, "laplacian"), verbose)
     delta = patch_noisy - patch_clean
     
     # El número de outliers se calcula sobre el patch limpio para que no dependa de otros componentes
@@ -153,7 +157,8 @@ def degrade_patch(patch_clean, components, sigma, laplace_scale, axes_mode, outl
             seed=component_seed(seed, f"{outlier_type}_outliers"),
             z_buffer_above=cfg.OUTLIER_Z_ABOVE,
             z_buffer_below=cfg.OUTLIER_Z_BELOW,
-            n_clusters=cfg.OUTLIER_CLUSTERS_COUNT
+            n_clusters=cfg.OUTLIER_CLUSTERS_COUNT,
+            verbose=verbose
         )
         for outlier_type in ("global", "clustered")
         if f"{outlier_type}_outliers" in components

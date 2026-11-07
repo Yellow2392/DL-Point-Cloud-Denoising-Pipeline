@@ -128,7 +128,7 @@ def plot_patch_diagnostics(clean_vis, noisy_vis, delta, delta_vis, axes_mode, no
 
 
 def plot_denoising_comparison(clean_points, noisy_points, noisy_is_outlier, denoised_points, denoised_is_outlier,
-                              noise_label, output_path, show=True):
+                              noise_label, output_path, method_label="SOR + MLS", show=True):
     # La escala de color se fija con la nube limpia: si incluyera los outliers (flotando varios metros
     # sobre el terreno) comprimiría el relieve en pocos colores. Los outliers se dibujan aparte.
     z_min = clean_points[:, 2].min()
@@ -143,10 +143,10 @@ def plot_denoising_comparison(clean_points, noisy_points, noisy_is_outlier, deno
     titles = [
         "1. Original / Limpio",
         "2. Degradado",
-        "3. Restaurado: SOR + MLS"
+        f"3. Restaurado: {method_label}"
     ]
 
-    # En la nube restaurada solo quedan los outliers que la fase de remoción (SOR) no detectó
+    # En la nube restaurada solo quedan los outliers que la fase de remoción no detectó
     no_outliers = np.zeros(len(clean_points), dtype=bool)
     datasets = [(clean_points, no_outliers), (noisy_points, noisy_is_outlier), (denoised_points, denoised_is_outlier)]
 
@@ -185,7 +185,7 @@ def plot_denoising_comparison(clean_points, noisy_points, noisy_is_outlier, deno
     cbar.set_label("Elevación Z (m)")
 
     fig.suptitle(
-        f"Evaluación de Denoising: SOR + MLS | {noise_label}",
+        f"Evaluación de Denoising: {method_label} | {noise_label}",
         fontsize=16
     )
 
@@ -358,8 +358,8 @@ class CleanVsDegradedViewer:
         print(f"Eliminados por la fase de remoción (en la muestra): {np.sum(removed & self.is_outlier):,} outliers (cian), "
               f"{np.sum(removed & ~self.is_outlier):,} puntos válidos (rojo)")
         print("Teclas:")
-        print("  1 / 2 / 3 : mostrar/ocultar nube limpia (gris) / degradada / restaurada (SOR + MLS)")
-        print("  4         : mostrar/ocultar puntos eliminados por SOR (cian = outlier, rojo = terreno válido)")
+        print("  1 / 2 / 3 : mostrar/ocultar nube limpia (gris) / degradada / restaurada (fase 1 + fase 2)")
+        print("  4         : mostrar/ocultar puntos eliminados en la fase 1 (cian = outlier, rojo = terreno válido)")
         print("  V         : mostrar/ocultar vectores de desplazamiento limpio -> degradado")
         print("  C         : alternar color por error respecto de la limpia / por elevación")
         print("  M         : alternar disposición superpuesta / lado a lado")
@@ -373,8 +373,8 @@ class CleanVsDegradedViewer:
         print("    El color sigue indicando el error real, sin amplificar.")
         print("  - Vectores (V) con la limpia oculta y error amplificado: dirección y magnitud del ruido por")
         print("    punto; con ruido laplaciano destacan los pocos desplazamientos grandes de la cola pesada.")
-        print("  - Alterna 2 y 3 sin mover la cámara para ver qué corrigen SOR y MLS.")
-        print("  - Muestra solo 3 y 4: los puntos magenta que quedan en la restaurada son outliers que SOR no")
+        print("  - Alterna 2 y 3 sin mover la cámara para ver qué corrigen ambas fases.")
+        print("  - Muestra solo 3 y 4: los puntos magenta que quedan en la restaurada son outliers que la fase 1 no")
         print("    detectó; los rojos de la capa 4 son terreno válido perdido (huecos en la superficie).")
         print("  - Lado a lado (M) + color por elevación (C) para comparar la forma general del relieve.")
 
