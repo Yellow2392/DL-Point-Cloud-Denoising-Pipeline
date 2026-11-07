@@ -127,7 +127,8 @@ def plot_patch_diagnostics(clean_vis, noisy_vis, delta, delta_vis, axes_mode, no
     plt.close(fig)
 
 
-def plot_denoising_comparison(clean_points, noisy_points, denoised_points, is_outlier, noise_label, output_path, show=True):
+def plot_denoising_comparison(clean_points, noisy_points, noisy_is_outlier, denoised_points, denoised_is_outlier,
+                              noise_label, output_path, show=True):
     # La escala de color se fija con la nube limpia: si incluyera los outliers (flotando varios metros
     # sobre el terreno) comprimiría el relieve en pocos colores. Los outliers se dibujan aparte.
     z_min = clean_points[:, 2].min()
@@ -142,11 +143,12 @@ def plot_denoising_comparison(clean_points, noisy_points, denoised_points, is_ou
     titles = [
         "1. Original / Limpio",
         "2. Degradado",
-        "3. Denoising: Moving Least Squares"
+        "3. Restaurado: SOR + MLS"
     ]
 
+    # En la nube restaurada solo quedan los outliers que la fase de remoción (SOR) no detectó
     no_outliers = np.zeros(len(clean_points), dtype=bool)
-    datasets = [(clean_points, no_outliers), (noisy_points, is_outlier), (denoised_points, is_outlier)]
+    datasets = [(clean_points, no_outliers), (noisy_points, noisy_is_outlier), (denoised_points, denoised_is_outlier)]
 
     for ax, (points, outlier_mask), title in zip(axs, datasets, titles):
         inliers = points[~outlier_mask]
@@ -183,7 +185,7 @@ def plot_denoising_comparison(clean_points, noisy_points, denoised_points, is_ou
     cbar.set_label("Elevación Z (m)")
 
     fig.suptitle(
-        f"Evaluación de Denoising: MLS Clásico | {noise_label}",
+        f"Evaluación de Denoising: SOR + MLS | {noise_label}",
         fontsize=16
     )
 
@@ -195,12 +197,16 @@ def plot_denoising_comparison(clean_points, noisy_points, denoised_points, is_ou
 
 OUTLIER_COLOR = np.array([1.0, 0.0, 1.0])   # Magenta: no aparece en los mapas de color usados
 CLEAN_GRAY = np.array([0.55, 0.55, 0.55])
+REMOVED_OUTLIER_COLOR = np.array([0.0, 1.0, 1.0])   # Cian: outlier inyectado eliminado correctamente
+REMOVED_INLIER_COLOR = np.array([1.0, 0.15, 0.15])  # Rojo: punto válido del terreno eliminado por error
 
 class CleanVsDegradedViewer:
     # Visor Open3D interactivo para comparar la nube limpia con la degradada (y opcionalmente la restaurada).
     # Todas las nubes se submuestrean con los mismos índices, conservando la correspondencia punto a punto.
+    # 'denoised' debe estar alineada con 'degraded'; 'kept_mask' indica qué puntos conservó la fase de
+    # remoción de outliers (los demás no forman parte de la nube restaurada).
 
-    def __init__(self, clean, degraded, is_outlier, denoised, window_name, max_points, max_lines, error_amplify, seed):
+    def __init__(self, clean, degraded, is_outlier, denoised, kept_mask, window_name, max_points, max_lines, error_amplify, seed):
         rng = np.random.default_rng(seed)
         n_clean = len(clean)
         idx_inliers = np.sort(rng.choice(n_clean, min(max_points, n_clean), replace=False))
@@ -218,6 +224,10 @@ class CleanVsDegradedViewer:
         self.denoised = None if denoised is None else np.vstack((denoised[idx_inliers], denoised[idx_outliers]))
         self.n_outliers = len(idx_outliers)
         self.idx_lines = idx_lines
+        if kept_mask is None:
+            kept_mask = np.ones(len(degraded), dtype=bool)
+        self.kept = np.concatenate((kept_mask[idx_inliers], kept_mask[idx_outliers]))
+        self.is_outlier = np.concatenate((np.zeros(len(idx_inliers), bool), np.ones(len(idx_outliers), bool)))
 
         # Error por punto respecto de su posición limpia (solo inliers); escala común para comparar nubes
         n_in = len(idx_inliers)
@@ -230,7 +240,7 @@ class CleanVsDegradedViewer:
         self.error_amplify = error_amplify
         self.color_mode = "error"        # "error" o "elevation"
         self.side_by_side = False
-        self.show = {"clean": True, "degraded": True, "denoised": False, "lines": False}
+        self.show = {"clean": True, "degraded": True, "denoised": False, "removed": False, "lines": False}
         self.vis = None
 
     # --- Construcción de geometrías ---
@@ -292,8 +302,15 @@ class CleanVsDegradedViewer:
             degraded = self._amplified(self.degraded)
             geoms.append(self._point_cloud(degraded, self._cloud_colors(degraded, self.degraded_error), 1))
         if self.show["denoised"] and self.denoised is not None:
+            # Solo los puntos conservados por la fase de remoción forman la nube restaurada
             denoised = self._amplified(self.denoised)
-            geoms.append(self._point_cloud(denoised, self._cloud_colors(denoised, self.denoised_error), 2))
+            colors = self._cloud_colors(denoised, self.denoised_error)
+            geoms.append(self._point_cloud(denoised[self.kept], colors[self.kept], 2))
+        if self.show["removed"] and not self.kept.all():
+            # Puntos eliminados, en su posición degradada: cian si eran outliers, rojo si eran terreno válido
+            removed = ~self.kept
+            colors = np.where(self.is_outlier[removed, None], REMOVED_OUTLIER_COLOR, REMOVED_INLIER_COLOR)
+            geoms.append(self._point_cloud(self._amplified(self.degraded)[removed], colors, 1))
         if self.show["lines"] and not self.side_by_side:
             geoms.append(self._displacement_lines())
         return geoms
@@ -337,8 +354,12 @@ class CleanVsDegradedViewer:
         print("\n" + "=" * 70 + f"\nVISOR 3D: {self.window_name}\n" + "=" * 70)
         print(f"Puntos mostrados: {len(self.clean):,} del patch, {self.n_outliers:,} outliers (magenta)")
         print(f"Escala de error (inferno): 0 -> {self.error_vmax:.3f} m (p95 del error de la nube degradada)")
+        removed = ~self.kept
+        print(f"Eliminados por la fase de remoción (en la muestra): {np.sum(removed & self.is_outlier):,} outliers (cian), "
+              f"{np.sum(removed & ~self.is_outlier):,} puntos válidos (rojo)")
         print("Teclas:")
-        print("  1 / 2 / 3 : mostrar/ocultar nube limpia (gris) / degradada / restaurada por MLS")
+        print("  1 / 2 / 3 : mostrar/ocultar nube limpia (gris) / degradada / restaurada (SOR + MLS)")
+        print("  4         : mostrar/ocultar puntos eliminados por SOR (cian = outlier, rojo = terreno válido)")
         print("  V         : mostrar/ocultar vectores de desplazamiento limpio -> degradado")
         print("  C         : alternar color por error respecto de la limpia / por elevación")
         print("  M         : alternar disposición superpuesta / lado a lado")
@@ -352,7 +373,9 @@ class CleanVsDegradedViewer:
         print("    El color sigue indicando el error real, sin amplificar.")
         print("  - Vectores (V) con la limpia oculta y error amplificado: dirección y magnitud del ruido por")
         print("    punto; con ruido laplaciano destacan los pocos desplazamientos grandes de la cola pesada.")
-        print("  - Alterna 2 y 3 sin mover la cámara para ver qué corrige MLS y qué no (los outliers persisten).")
+        print("  - Alterna 2 y 3 sin mover la cámara para ver qué corrigen SOR y MLS.")
+        print("  - Muestra solo 3 y 4: los puntos magenta que quedan en la restaurada son outliers que SOR no")
+        print("    detectó; los rojos de la capa 4 son terreno válido perdido (huecos en la superficie).")
         print("  - Lado a lado (M) + color por elevación (C) para comparar la forma general del relieve.")
 
     def run(self):
@@ -367,6 +390,7 @@ class CleanVsDegradedViewer:
             "1": self._toggle("clean"),
             "2": self._toggle("degraded"),
             "3": self._toggle("denoised"),
+            "4": self._toggle("removed"),
             "V": self._toggle("lines"),
             "C": self._toggle_color_mode,
             "M": self._toggle_layout,
@@ -379,8 +403,8 @@ class CleanVsDegradedViewer:
         self.vis.run()
         self.vis.destroy_window()
 
-def view_clean_vs_degraded(clean, degraded, is_outlier, denoised=None, window_name="Limpia vs. degradada",
+def view_clean_vs_degraded(clean, degraded, is_outlier, denoised=None, kept_mask=None, window_name="Limpia vs. degradada",
                            max_points=100_000, max_lines=3_000, error_amplify=1.0, seed=42):
     CleanVsDegradedViewer(
-        clean, degraded, is_outlier, denoised, window_name, max_points, max_lines, error_amplify, seed
+        clean, degraded, is_outlier, denoised, kept_mask, window_name, max_points, max_lines, error_amplify, seed
     ).run()

@@ -39,24 +39,30 @@ OUTLIER_CLUSTERS_COUNT = 3      # Cantidad de clústeres independientes para out
 # Componentes disponibles: "gaussian" (NOISE_SIGMA), "laplacian" (NOISE_LAPLACE_SCALE),
 # "global_outliers" y "clustered_outliers" (OUTLIER_RATIO). Los ruidos posicionales se suman.
 NOISE_COMBINATIONS = [
-    ["gaussian"],
-    ["laplacian"],
-    ["gaussian", "laplacian"],
-    ["gaussian", "clustered_outliers"],
-    ["gaussian", "laplacian", "clustered_outliers"],
-    ["gaussian", "laplacian", "global_outliers", "clustered_outliers"],
+    #["gaussian"],
+    #["laplacian"],
+    #["gaussian", "laplacian"],
+    ["gaussian", "global_outliers"],
+    #["gaussian", "laplacian", "clustered_outliers"],
+    #["gaussian", "laplacian", "global_outliers", "clustered_outliers"],
 ]
 
 # -------------------------------------------------------------------
 # Visualización de resultados
 SHOW_FIGURES = True          # Mostrar las figuras de Matplotlib en pantalla (siempre se guardan en OUTPUT_DIR)
-OPEN3D_VIEWER = True         # Abrir el visor 3D interactivo (limpia vs. degradada vs. MLS) en cada experimento
-VIEW_MAX_POINTS = 100_000    # Puntos del patch mostrados en el visor 3D
-VIEW_MAX_LINES = 3_000       # Vectores de desplazamiento (limpio -> degradado) mostrados en el visor 3D
+OPEN3D_VIEWER = True         # Abrir el visor 3D interactivo (limpia vs. degradada vs. SOR + MLS) en cada experimento
+VIEW_MAX_POINTS = 200_000    # Puntos del patch mostrados en el visor 3D
+VIEW_MAX_LINES = 5_000       # Vectores de desplazamiento (limpio -> degradado) mostrados en el visor 3D
 VIEW_ERROR_AMPLIFY = 1.0     # Amplificación inicial del desplazamiento limpio -> degradado en el visor 3D (ajustable con E/D)
 
 # -------------------------------------------------------------------
-# Para MLS
+# Fase 1: remoción de outliers con Statistical Outlier Removal (SOR)
+SOR_K_NEIGHBORS = 30     # Vecinos usados para la distancia media de cada punto
+SOR_STD_MUL = 2.0        # Umbral = media + SOR_STD_MUL × desviación estándar de las distancias medias
+                         # (con 1.0 se elimina ~17% del terreno válido aun sin outliers inyectados)
+
+# -------------------------------------------------------------------
+# Fase 2: predicción de desplazamientos con MLS
 MLS_K_NEIGHBORS = 40     # Número de vecinos a buscar (k)
 MLS_H_PARAM = None       # Ancho de banda gaussiano fijo (m); None = automático según el espaciado
 MLS_H_FACTOR = 5.0       # h automático = MLS_H_FACTOR × espaciado mediano entre vecinos de la nube de entrada

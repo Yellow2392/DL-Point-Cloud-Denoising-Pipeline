@@ -4,8 +4,10 @@ from data_loader import load_las_data, print_metadata
 from stats import calculate_spatial_extent, calculate_density, print_stats, calculate_nearest_neighbor
 from visualization import render_3d_heatmap, plot_profile_statistics, plot_patch_diagnostics, plot_denoising_comparison, view_clean_vs_degraded
 from experiment import extract_patch, degrade_patch, experiment_name, describe_degradation
+from models.statistical_outlier_removal import statistical_outlier_removal
 from models.moving_least_squares import moving_least_squares_1st_order, estimate_bandwidth
 from metrics.evaluation import evaluate, print_metrics_table, save_summary_csv
+from metrics.outlier_detection import outlier_detection_metrics
 
 def main():
     # 1. Carga de datos
@@ -36,10 +38,12 @@ def main():
     print(f"Patch de {cfg.PATCH_SIZE} m centrado en {center}: {len(patch_clean):,} puntos")
 
     all_results = {}
+    all_detection = {}
     for components in cfg.NOISE_COMBINATIONS:
-        all_results[experiment_name(components)] = run_experiment(patch_clean, patch_indices, components)
+        name = experiment_name(components)
+        all_results[name], all_detection[name] = run_experiment(patch_clean, patch_indices, components)
 
-    # 7. Resumen de todas las combinaciones
+    # 8. Resumen de todas las combinaciones
     print("\n" + "=" * 70 + "\nRESUMEN DE EXPERIMENTOS\n" + "=" * 70)
     print_metrics_table({
         f"{name} | {cloud}": metrics
@@ -49,6 +53,12 @@ def main():
     summary_path = cfg.OUTPUT_DIR / "metrics_summary.csv"
     save_summary_csv(all_results, summary_path)
     print(f"\nResumen guardado en {summary_path}")
+
+    print("\n" + "=" * 70 + "\nRESUMEN FASE 1: DETECCIÓN DE OUTLIERS (SOR)\n" + "=" * 70)
+    print_metrics_table(all_detection)
+    detection_path = cfg.OUTPUT_DIR / "outlier_removal_summary.csv"
+    save_summary_csv({name: {"SOR": metrics} for name, metrics in all_detection.items()}, detection_path)
+    print(f"\nResumen guardado en {detection_path}")
 
 def run_experiment(patch_clean, patch_indices, components):
     name = experiment_name(components)
@@ -60,31 +70,45 @@ def run_experiment(patch_clean, patch_indices, components):
         cfg.NOISE_AXES, cfg.OUTLIER_RATIO, cfg.NOISE_SEED
     )
 
-    # 5. Denoising: Aplicación de Moving Least Squares
-    print("\n" + "=" * 70 + "\nDENOISING: MOVING LEAST SQUARES (MLS)\n" + "=" * 70)
-    # El ancho de banda se estima sobre la nube corrompida: la referencia limpia no está disponible en la práctica
+    # 5. Fase 1: remoción de outliers con Statistical Outlier Removal (SOR)
+    print("\n" + "=" * 70 + "\nFASE 1: STATISTICAL OUTLIER REMOVAL (SOR)\n" + "=" * 70)
+    patch_sor, kept_mask, sor_threshold = statistical_outlier_removal(
+        patch_corrupted,
+        k_neighbors=cfg.SOR_K_NEIGHBORS,
+        std_mul=cfg.SOR_STD_MUL
+    )
+    n_removed = len(patch_corrupted) - len(patch_sor)
+    print(f"SOR con {cfg.SOR_K_NEIGHBORS} vecinos y std_mul={cfg.SOR_STD_MUL}: umbral={sor_threshold:.4f} m")
+    print(f"Puntos eliminados: {n_removed:,} de {len(patch_corrupted):,} ({n_removed / len(patch_corrupted):.2%})")
+
+    detection = outlier_detection_metrics(~kept_mask, is_outlier)
+    print("Detección frente a los outliers inyectados: " + ", ".join(f"{k}={v:.4f}" for k, v in detection.items()))
+
+    # 6. Fase 2: predicción de desplazamientos con Moving Least Squares sobre los puntos conservados
+    print("\n" + "=" * 70 + "\nFASE 2: MOVING LEAST SQUARES (MLS)\n" + "=" * 70)
+    # El ancho de banda se estima sobre la entrada de MLS: la referencia limpia no está disponible en la práctica
     h_param = cfg.MLS_H_PARAM
     if h_param is None:
-        h_param, spacing = estimate_bandwidth(patch_corrupted, cfg.MLS_H_FACTOR)
+        h_param, spacing = estimate_bandwidth(patch_sor, cfg.MLS_H_FACTOR)
         print(f"Espaciado mediano entre vecinos: {spacing:.4f} m -> h = {cfg.MLS_H_FACTOR} × espaciado")
     print(f"Iniciando MLS con {cfg.MLS_K_NEIGHBORS} vecinos y h={h_param:.4f} m...")
 
-    # Aplicamos MLS a la nube corrompida
     patch_denoised = moving_least_squares_1st_order(
-        patch_corrupted,
+        patch_sor,
         k_neighbors=cfg.MLS_K_NEIGHBORS,
         h_param=h_param
     )
+    # Outliers inyectados que sobrevivieron a la fase 1 (alineado con patch_sor y patch_denoised)
+    denoised_is_outlier = is_outlier[kept_mask]
 
-    # 6. Métricas frente a la nube de referencia limpia
-    # Las filas "(inliers)" excluyen los outliers inyectados: MLS no elimina puntos, solo los proyecta,
-    # así que comparar ambas variantes separa el efecto del suavizado del de los outliers remanentes.
+    # 7. Métricas frente a la nube de referencia limpia
+    # Las filas "(inliers)" excluyen los outliers inyectados (en el resultado final, los que SOR no eliminó),
+    # separando el efecto del suavizado del de los outliers remanentes.
     print("\n" + "=" * 70 + "\nMÉTRICAS FRENTE A LA REFERENCIA\n" + "=" * 70)
-    clouds = {"Corrompida": patch_corrupted, "MLS": patch_denoised}
+    clouds = {"Corrompida": patch_corrupted, "SOR": patch_sor, "SOR + MLS": patch_denoised}
     if is_outlier.any():
-        valid_points_mask = ~is_outlier
-        clouds["Corrompida (inliers)"] = patch_corrupted[valid_points_mask]
-        clouds["MLS (inliers)"] = patch_denoised[valid_points_mask]
+        clouds["Corrompida (inliers)"] = patch_corrupted[~is_outlier]
+        clouds["SOR + MLS (inliers)"] = patch_denoised[~denoised_is_outlier]
     results = {
         cloud_name: evaluate(cloud, patch_clean, cfg.DCD_ALPHA, cfg.NORMAL_K_NEIGHBORS)
         for cloud_name, cloud in clouds.items()
@@ -92,29 +116,34 @@ def run_experiment(patch_clean, patch_indices, components):
     print_metrics_table(results)
 
     # Generar visualización del denoising
-    plot_denoising_path = cfg.OUTPUT_DIR / f"denoising_mls_comparison_{name}.png"
+    plot_denoising_path = cfg.OUTPUT_DIR / f"denoising_sor_mls_comparison_{name}.png"
 
     # Submuestreo para graficar sin colapsar la memoria/vista.
-    # Las nubes corrompida y restaurada se muestrean sobre todos sus puntos (outliers incluidos,
-    # que están al final del array); la limpia, por separado sobre los suyos.
+    # Cada nube se muestrea sobre todos sus puntos (outliers incluidos, que están al final del array).
     rng_vis = np.random.default_rng(123)
     idx_clean_vis = rng_vis.choice(len(patch_clean), min(cfg.MAX_DISPLAY, len(patch_clean)), replace=False)
     idx_corrupted_vis = rng_vis.choice(len(patch_corrupted), min(cfg.MAX_DISPLAY, len(patch_corrupted)), replace=False)
+    idx_denoised_vis = rng_vis.choice(len(patch_denoised), min(cfg.MAX_DISPLAY, len(patch_denoised)), replace=False)
 
     plot_denoising_comparison(
         patch_clean[idx_clean_vis],
         patch_corrupted[idx_corrupted_vis],
-        patch_denoised[idx_corrupted_vis],
         is_outlier[idx_corrupted_vis],
+        patch_denoised[idx_denoised_vis],
+        denoised_is_outlier[idx_denoised_vis],
         noise_label,
         plot_denoising_path,
         show=cfg.SHOW_FIGURES
     )
 
-    # Visor 3D interactivo para inspeccionar las diferencias entre la nube limpia y la degradada
+    # Visor 3D interactivo para inspeccionar las diferencias entre la nube limpia y la degradada.
+    # El visor necesita la nube restaurada alineada con la degradada: los puntos eliminados por SOR
+    # conservan su posición degradada y se identifican con kept_mask.
     if cfg.OPEN3D_VIEWER:
+        restored_aligned = patch_corrupted.copy()
+        restored_aligned[kept_mask] = patch_denoised
         view_clean_vs_degraded(
-            patch_clean, patch_corrupted, is_outlier, patch_denoised,
+            patch_clean, patch_corrupted, is_outlier, restored_aligned, kept_mask=kept_mask,
             window_name=f"{cfg.TERRAIN} - {name}",
             max_points=cfg.VIEW_MAX_POINTS, max_lines=cfg.VIEW_MAX_LINES,
             error_amplify=cfg.VIEW_ERROR_AMPLIFY, seed=cfg.SEED
@@ -142,7 +171,7 @@ def run_experiment(patch_clean, patch_indices, components):
     print(f"Datos guardados en {cfg.OUTPUT_DIR}")
     """
 
-    return results
+    return results, detection
 
 if __name__ == "__main__":
     main()
